@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "copilot/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust:
+          - "1.75.0"
+          - stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${{ matrix.rust }}" --profile minimal --component rustfmt --component clippy
+          rustup default "${{ matrix.rust }}"
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - name: Validate formatting
+        run: make fmt
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build

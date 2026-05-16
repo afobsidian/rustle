@@ -18,6 +18,9 @@ pub type EventSender = broadcast::Sender<AppEvent>;
 /// Receiver side of the Rustle application event bus.
 pub type EventReceiver = broadcast::Receiver<AppEvent>;
 
+/// Error returned when an application event cannot be published.
+pub type EventPublishError = Box<broadcast::error::SendError<AppEvent>>;
+
 /// Application-wide event exchanged over the internal broadcast bus.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AppEvent {
@@ -99,8 +102,8 @@ impl EventBus {
     }
 
     /// Publishes an event and returns the number of active receivers that accepted it.
-    pub fn publish(&self, event: AppEvent) -> Result<usize, broadcast::error::SendError<AppEvent>> {
-        self.sender.send(event)
+    pub fn publish(&self, event: AppEvent) -> Result<usize, EventPublishError> {
+        self.sender.send(event).map_err(Box::new)
     }
 }
 

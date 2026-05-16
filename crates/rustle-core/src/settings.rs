@@ -17,7 +17,7 @@ const DEFAULT_DB_PATH: &str = "~/.local/share/rustle/rustle.db";
 const DEFAULT_SYSTEM_PROMPT: &str = "You are a meeting notes assistant. Produce concise, structured notes with a summary, key decisions, action items, and attendees when available.";
 
 /// All persisted user settings.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
     /// General application settings.
@@ -45,10 +45,11 @@ pub struct GeneralSettings {
 }
 
 /// Supported login startup integration mechanisms.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LoginMethod {
     /// XDG autostart desktop file integration.
+    #[default]
     Xdg,
     /// systemd user service integration.
     Systemd,
@@ -67,10 +68,11 @@ pub struct MeetingSettings {
 }
 
 /// Supported meeting detection methods.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RecordingDetectionMethod {
     /// Hyprland IPC and client inspection.
+    #[default]
     Hyprland,
     /// PipeWire stream inspection.
     PipeWire,
@@ -105,10 +107,11 @@ pub struct TranscriptionSettings {
 }
 
 /// Supported transcription methods.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TranscriptionMethod {
     /// Local Whisper transcription.
+    #[default]
     Local,
     /// OpenAI Whisper API transcription.
     Openai,
@@ -131,10 +134,11 @@ pub struct AiSettings {
 }
 
 /// Supported AI summarisation providers.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AiProvider {
     /// OpenAI chat completions.
+    #[default]
     Openai,
     /// Anthropic Claude.
     Anthropic,
@@ -264,31 +268,12 @@ impl Settings {
     }
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            meeting: MeetingSettings::default(),
-            audio: AudioSettings::default(),
-            transcription: TranscriptionSettings::default(),
-            ai: AiSettings::default(),
-            storage: StorageSettings::default(),
-        }
-    }
-}
-
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             start_on_login: false,
             start_on_login_method: LoginMethod::Xdg,
         }
-    }
-}
-
-impl Default for LoginMethod {
-    fn default() -> Self {
-        Self::Xdg
     }
 }
 
@@ -299,12 +284,6 @@ impl Default for MeetingSettings {
             auto_capture: true,
             detection_method: RecordingDetectionMethod::Hyprland,
         }
-    }
-}
-
-impl Default for RecordingDetectionMethod {
-    fn default() -> Self {
-        Self::Hyprland
     }
 }
 
@@ -329,12 +308,6 @@ impl Default for TranscriptionSettings {
     }
 }
 
-impl Default for TranscriptionMethod {
-    fn default() -> Self {
-        Self::Local
-    }
-}
-
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
@@ -344,12 +317,6 @@ impl Default for AiSettings {
             ollama_url: "http://localhost:11434".to_owned(),
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_owned(),
         }
-    }
-}
-
-impl Default for AiProvider {
-    fn default() -> Self {
-        Self::Openai
     }
 }
 
