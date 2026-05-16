@@ -8,7 +8,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 async fn main() -> anyhow::Result<()> {
     install_tracing();
 
-    let settings = Settings::load().await?;
+    Settings::load().await?;
     let event_bus = EventBus::new();
     let sender = event_bus.sender();
 
@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     rustle_storage::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
     rustle_ui::initialise(sender, Some(event_bus.subscribe())).await?;
 
-    info!(?settings, "rustle initialised");
+    info!("rustle initialised");
     Ok(())
 }
 

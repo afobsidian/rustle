@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::fs::{self, OpenOptions};
+use tokio::io::AsyncWriteExt;
 use tracing::warn;
 
 use crate::errors::CoreError;
@@ -202,12 +203,7 @@ impl Settings {
         }
 
         let content = toml::to_string_pretty(&self.validated())?;
-        fs::write(path, content)
-            .await
-            .map_err(|source| CoreError::WriteSettings {
-                path: path.to_path_buf(),
-                source,
-            })
+        secure_write(path, content.as_bytes()).await
     }
 
     /// Returns a settings copy with invalid numeric and empty-string values replaced by defaults.
@@ -394,6 +390,51 @@ where
     }
 }
 
+async fn secure_write(path: &Path, content: &[u8]) -> Result<(), CoreError> {
+    set_owner_only_permissions(path).await?;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .await
+        .map_err(|source| CoreError::WriteSettings {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    file.write_all(content)
+        .await
+        .map_err(|source| CoreError::WriteSettings {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    file.flush()
+        .await
+        .map_err(|source| CoreError::WriteSettings {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    set_owner_only_permissions(path).await
+}
+
+#[cfg(target_family = "unix")]
+async fn set_owner_only_permissions(path: &Path) -> Result<(), CoreError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    match fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(CoreError::WriteSettings {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +478,62 @@ input_device = 'pipewire'
 
         assert_eq!(settings.meeting, MeetingSettings::default());
         assert_eq!(settings.audio.input_device, "pipewire");
+    }
+
+    #[tokio::test]
+    async fn save_creates_settings_file_with_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir()
+            .join("rustle-settings-permissions")
+            .join(format!("{}.toml", uuid::Uuid::new_v4()));
+
+        Settings::default()
+            .save_to_path(&path)
+            .await
+            .expect("settings should save");
+
+        let mode = std::fs::metadata(&path)
+            .expect("settings file should exist")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(mode, 0o600);
+
+        std::fs::remove_file(&path).expect("settings file should be removed");
+        if let Some(parent) = path.parent() {
+            std::fs::remove_dir(parent).expect("settings temp dir should be removed");
+        }
+    }
+
+    #[tokio::test]
+    async fn save_restricts_existing_settings_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir()
+            .join("rustle-settings-existing-permissions")
+            .join(format!("{}.toml", uuid::Uuid::new_v4()));
+        let parent = path.parent().expect("path should have parent");
+        std::fs::create_dir_all(parent).expect("settings temp dir should be created");
+        std::fs::write(&path, "openai_api_key = 'secret'").expect("settings file should be seeded");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("settings file permissions should be widened");
+
+        Settings::default()
+            .save_to_path(&path)
+            .await
+            .expect("settings should save");
+
+        let mode = std::fs::metadata(&path)
+            .expect("settings file should exist")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(mode, 0o600);
+
+        std::fs::remove_file(&path).expect("settings file should be removed");
+        std::fs::remove_dir(parent).expect("settings temp dir should be removed");
     }
 }
