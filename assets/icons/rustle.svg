@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rustle">
+  <rect width="64" height="64" rx="14" fill="#223344"/>
+  <path d="M20 18h24v20c0 6.6-5.4 12-12 12s-12-5.4-12-12z" fill="#8bd3dd"/>
+  <path d="M28 14h8v28h-8z" fill="#f6f4d2"/>
+</svg>
