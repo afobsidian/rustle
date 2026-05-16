@@ -24,5 +24,8 @@ fn spec_012_event_bus_reports_when_no_receivers_are_available() {
         .publish(AppEvent::QuitRequested)
         .expect_err("publishing without receivers should be reported");
 
-    assert!(matches!(*error, tokio::sync::broadcast::error::SendError(_)));
+    assert!(matches!(
+        *error,
+        tokio::sync::broadcast::error::SendError(_)
+    ));
 }

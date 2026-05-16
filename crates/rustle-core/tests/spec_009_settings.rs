@@ -38,7 +38,10 @@ fn spec_009_defaults_match_persistent_settings_schema() {
     assert_eq!(settings.ai.model, "gpt-4o");
     assert_eq!(settings.ai.api_key, "");
     assert_eq!(settings.ai.ollama_url, "http://localhost:11434");
-    assert!(settings.ai.system_prompt.contains("meeting notes assistant"));
+    assert!(settings
+        .ai
+        .system_prompt
+        .contains("meeting notes assistant"));
     assert_eq!(settings.storage.notes_dir, "~/.local/share/rustle/notes");
     assert_eq!(settings.storage.db_path, "~/.local/share/rustle/rustle.db");
 }
