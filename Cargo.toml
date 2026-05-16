@@ -1,0 +1,49 @@
+[workspace]
+members = [
+    "crates/rustle-core",
+    "crates/rustle-tray",
+    "crates/rustle-detection",
+    "crates/rustle-audio",
+    "crates/rustle-transcription",
+    "crates/rustle-ai",
+    "crates/rustle-storage",
+    "crates/rustle-ui",
+    ".",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0.86"
+serde = { version = "1.0.203", features = ["derive"] }
+thiserror = "1.0.69"
+tokio = { version = "1.37.0", features = ["full"] }
+toml = "0.8.14"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt"] }
+uuid = { version = "1.8.0", features = ["v4", "serde"] }
+
+[package]
+name = "rustle"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+rustle-ai = { path = "crates/rustle-ai" }
+rustle-audio = { path = "crates/rustle-audio" }
+rustle-core = { path = "crates/rustle-core" }
+rustle-detection = { path = "crates/rustle-detection" }
+rustle-storage = { path = "crates/rustle-storage" }
+rustle-tray = { path = "crates/rustle-tray" }
+rustle-transcription = { path = "crates/rustle-transcription" }
+rustle-ui = { path = "crates/rustle-ui" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
