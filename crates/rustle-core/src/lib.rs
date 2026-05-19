@@ -13,8 +13,8 @@ pub use events::{
 };
 pub use paths::{default_data_dir, expand_tilde, is_safe_child, resolve_notes_dir, safe_filename};
 pub use settings::{
-    AiProvider, AiSettings, AudioSettings, GeneralSettings, LoginMethod, MeetingSettings,
-    RecordingDetectionMethod, Settings, StorageSettings, TranscriptionMethod,
+    default_config_path, AiProvider, AiSettings, AudioSettings, GeneralSettings, LoginMethod,
+    MeetingSettings, RecordingDetectionMethod, Settings, StorageSettings, TranscriptionMethod,
     TranscriptionSettings,
 };
 pub use types::{DetectionSource, MeetingNotes, TranscriptSegment};

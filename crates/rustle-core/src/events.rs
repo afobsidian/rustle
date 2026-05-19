@@ -71,6 +71,10 @@ pub enum AppEvent {
     },
     /// The notes view should be opened.
     OpenNotesRequested,
+    /// The latest transcript draft should be opened.
+    OpenTranscriptRequested,
+    /// The settings editor should be opened.
+    OpenSettingsRequested,
     /// A manual transcript draft has been created for a meeting.
     TranscriptDraftReady {
         /// Meeting identifier associated with the transcript draft.
