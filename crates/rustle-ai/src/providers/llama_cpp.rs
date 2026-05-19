@@ -21,9 +21,9 @@ pub(crate) async fn summarise(settings: &Settings, transcript: &str) -> Result<S
     {
         let settings = settings.clone();
         let transcript = transcript.to_owned();
-        return tokio::task::spawn_blocking(move || summarise_blocking(&settings, &transcript))
+        tokio::task::spawn_blocking(move || summarise_blocking(&settings, &transcript))
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())?
     }
 
     #[cfg(not(feature = "provider-llama-cpp"))]
@@ -75,14 +75,14 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
 
     let backend = backend()?;
     let model_path = model_path(settings)?;
-    let model = LlamaModel::load_from_file(&backend, model_path, &LlamaModelParams::default())
+    let model = LlamaModel::load_from_file(backend, model_path, &LlamaModelParams::default())
         .map_err(|error| error.to_string())?;
     let prompt = render_prompt(&model, settings.ai.system_prompt.trim(), &user_prompt)?;
 
     let n_ctx = NonZeroU32::new(2048).ok_or_else(|| "invalid llama.cpp context size".to_owned())?;
     let ctx_params = LlamaContextParams::default().with_n_ctx(Some(n_ctx));
     let mut ctx = model
-        .new_context(&backend, ctx_params)
+        .new_context(backend, ctx_params)
         .map_err(|error| error.to_string())?;
 
     let prompt_tokens = model

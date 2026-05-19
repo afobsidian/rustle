@@ -28,7 +28,7 @@ pub async fn initialise(
 }
 
 async fn summarisation_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
-    let mut runtime = AiRuntime::default();
+    let mut runtime = AiRuntime;
     let startup_settings = load_settings("startup AI warmup").await;
     runtime.warm_up(&startup_settings);
 
