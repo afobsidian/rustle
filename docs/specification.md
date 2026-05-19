@@ -114,9 +114,9 @@ Right-clicking the tray icon opens a context menu with core actions.
 
 #### Acceptance Criteria
 
-- [ ] Menu contains: **Open Notes**, **Current Meeting** (greyed out if none), **Settings**, **Quit**
+- [x] Menu contains: **Open Notes**, **Current Meeting** (greyed out if none), **Settings**, **Quit**
 - [ ] "Current Meeting" shows active meeting name when a Teams meeting is detected
-- [ ] Left-click on tray icon opens the Notes window
+- [x] Left-click on tray icon opens the Notes window
 - [ ] Menu renders correctly under Hyprland (Waybar SNI support)
 - [ ] All menu items have keyboard-accessible mnemonics
 
