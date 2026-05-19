@@ -6,11 +6,8 @@ pub(crate) fn summarise_with_reason(transcript: &str, reason: impl AsRef<str>) -
         "Model output was unavailable or invalid. Full transcript saved instead: {}",
         reason.as_ref()
     );
-    let markdown = format!(
-        "# Meeting Notes\n\n## Warning\n\n{}\n\n## Transcript\n\n{}\n",
-        warning,
-        transcript
-    );
+    let markdown =
+        format!("# Meeting Notes\n\n## Warning\n\n{warning}\n\n## Transcript\n\n{transcript}\n");
 
     MeetingNotes {
         summary: warning,

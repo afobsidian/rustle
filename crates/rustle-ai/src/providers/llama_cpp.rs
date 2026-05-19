@@ -21,9 +21,9 @@ pub(crate) async fn summarise(settings: &Settings, transcript: &str) -> Result<S
     {
         let settings = settings.clone();
         let transcript = transcript.to_owned();
-        return tokio::task::spawn_blocking(move || summarise_blocking(&settings, &transcript))
+        tokio::task::spawn_blocking(move || summarise_blocking(&settings, &transcript))
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())?
     }
 
     #[cfg(not(feature = "provider-llama-cpp"))]
@@ -75,14 +75,14 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
 
     let backend = backend()?;
     let model_path = model_path(settings)?;
-    let model = LlamaModel::load_from_file(&backend, model_path, &LlamaModelParams::default())
+    let model = LlamaModel::load_from_file(backend, model_path, &LlamaModelParams::default())
         .map_err(|error| error.to_string())?;
     let prompt = render_prompt(&model, settings.ai.system_prompt.trim(), &user_prompt)?;
 
     let n_ctx = NonZeroU32::new(2048).ok_or_else(|| "invalid llama.cpp context size".to_owned())?;
     let ctx_params = LlamaContextParams::default().with_n_ctx(Some(n_ctx));
     let mut ctx = model
-        .new_context(&backend, ctx_params)
+        .new_context(backend, ctx_params)
         .map_err(|error| error.to_string())?;
 
     let prompt_tokens = model
@@ -153,7 +153,7 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
 
 #[cfg(feature = "provider-llama-cpp")]
 fn model_path(settings: &Settings) -> Result<std::path::PathBuf, String> {
-    use hf_hub::HFClientSync;
+    use hf_hub::api::sync::Api;
 
     if !settings.ai.model_path.trim().is_empty() {
         return Ok(std::path::PathBuf::from(settings.ai.model_path.trim()));
@@ -174,16 +174,14 @@ fn model_path(settings: &Settings) -> Result<std::path::PathBuf, String> {
         );
     }
 
-    let (owner, name) = repo
-        .split_once('/')
-        .ok_or_else(|| format!("invalid Hugging Face model repo `{repo}`"))?;
-    let client = HFClientSync::new().map_err(|error| error.to_string())?;
+    if !repo.contains('/') {
+        return Err(format!("invalid Hugging Face model repo `{repo}`"));
+    }
+    let client = Api::new().map_err(|error| error.to_string())?;
 
     client
-        .model(owner, name)
-        .download_file()
-        .filename(file.to_owned())
-        .send()
+        .model(repo.to_owned())
+        .get(file)
         .map_err(|error| error.to_string())
 }
 
@@ -203,7 +201,9 @@ fn render_prompt(
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<String, String> {
-    let template = model.chat_template(None).map_err(|error| error.to_string())?;
+    let template = model
+        .chat_template(None)
+        .map_err(|error| error.to_string())?;
     let messages = [
         llama_cpp_2::model::LlamaChatMessage::new("system".to_owned(), system_prompt.to_owned())
             .map_err(|error| error.to_string())?,
@@ -235,7 +235,10 @@ fn looks_degenerate(output: &str) -> bool {
         return true;
     }
 
-    let unique = lines.iter().copied().collect::<std::collections::BTreeSet<_>>();
+    let unique = lines
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
     unique.len() * 3 <= lines.len()
 }
 

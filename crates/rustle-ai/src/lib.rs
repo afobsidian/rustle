@@ -28,7 +28,7 @@ pub async fn initialise(
 }
 
 async fn summarisation_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
-    let mut runtime = AiRuntime::default();
+    let mut runtime = AiRuntime;
     let startup_settings = load_settings("startup AI warmup").await;
     runtime.warm_up(&startup_settings);
 
@@ -74,13 +74,7 @@ async fn summarise(
     match runtime.summarise(&settings, &transcript).await {
         SummarisationOutcome::Ready(notes) => {
             info!(meeting_id = %meeting_id, "summarisation complete");
-            publish(
-                event_tx,
-                AppEvent::SummarisationReady {
-                    meeting_id,
-                    notes,
-                },
-            );
+            publish(event_tx, AppEvent::SummarisationReady { meeting_id, notes });
         }
     }
 }
