@@ -176,7 +176,8 @@ fn transcribe_with_whisper(
     path: &Path,
     settings: &Settings,
 ) -> Result<Vec<TranscriptSegment>, String> {
-    let model_path = expand_tilde(&settings.transcription.model_path);
+    let model_path =
+        expand_tilde(&settings.transcription.model_path).map_err(|error| error.to_string())?;
     if !model_path.is_file() {
         return Err(format!(
             "Whisper model not found at {}; set transcription.model_path to a ggml model",
@@ -241,7 +242,7 @@ fn read_wav_as_whisper_audio(path: &Path) -> Result<Vec<f32>, String> {
     ))
 }
 
-fn wav_samples<R: std::io::Read>(
+fn wav_samples<R: std::io::Read + std::io::Seek>(
     reader: hound::WavReader<R>,
     spec: hound::WavSpec,
 ) -> Result<Vec<f32>, String> {

@@ -6,8 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-cpal = "0.15.3"
-hound = "3.5.1"
 rustle-core = { path = "../rustle-core" }
 tokio.workspace = true
 tracing.workspace = true

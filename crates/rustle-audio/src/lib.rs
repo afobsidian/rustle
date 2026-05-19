@@ -1,20 +1,21 @@
 //! Audio capture crate for Rustle.
 
-use std::fs::{self, File};
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rustle_core::{
     default_data_dir, safe_filename, tasks::spawn_logged, AppEvent, CoreError, EventReceiver,
     EventSender, Settings,
 };
+use tokio::fs;
+use tokio::process::Command;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const RECORDING_SAMPLE_RATE: &str = "16000";
+const RECORDING_CHANNELS: &str = "1";
+const STOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 struct ActiveRecording {
     meeting_id: Uuid,
@@ -30,23 +31,16 @@ struct CaptureConfig {
     event_tx: EventSender,
 }
 
-struct AudioChunk {
-    samples: Vec<f32>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecorderBackend {
+    PipeWire,
+    PulseAudio,
+    Alsa,
 }
 
-struct ChunkWriter {
-    directory: PathBuf,
-    file_stem: String,
-    sample_rate: u32,
-    channels: u16,
-    max_samples: u64,
-    max_bytes: u64,
-    event_tx: EventSender,
-    meeting_id: Uuid,
-    chunk_index: u64,
-    samples_in_chunk: u64,
-    writer: Option<hound::WavWriter<BufWriter<File>>>,
-    current_path: Option<PathBuf>,
+struct RecorderCommand {
+    program: &'static str,
+    args: Vec<String>,
 }
 
 /// Initialises the audio capture component with the shared application event bus.
@@ -78,15 +72,12 @@ async fn audio_capture_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     continue;
                 }
 
-                match start_recording(id, name, settings, event_tx.clone()).await {
-                    Ok(recording) => active = Some(recording),
-                    Err(error) => warn!(%error, meeting_id = %id, "failed to start audio capture"),
-                }
+                active = Some(start_recording(id, name, settings, event_tx.clone()));
             }
             Ok(AppEvent::MeetingEnded { id }) => {
                 if let Some(recording) = active.take() {
                     if recording.meeting_id == id {
-                        stop_recording(recording);
+                        stop_recording(recording).await;
                     } else {
                         warn!(meeting_id = %id, active_id = %recording.meeting_id, "meeting ended while another recording was active");
                         active = Some(recording);
@@ -95,7 +86,7 @@ async fn audio_capture_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
             }
             Ok(AppEvent::QuitRequested) => {
                 if let Some(recording) = active.take() {
-                    stop_recording(recording);
+                    stop_recording(recording).await;
                 }
                 break;
             }
@@ -108,13 +99,13 @@ async fn audio_capture_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
     }
 }
 
-async fn start_recording(
+fn start_recording(
     meeting_id: Uuid,
     meeting_name: String,
     settings: Settings,
     event_tx: EventSender,
-) -> Result<ActiveRecording, CoreError> {
-    let (stop_tx, stop_rx) = mpsc::channel();
+) -> ActiveRecording {
+    let (stop_tx, stop_rx) = mpsc::channel(1);
     let config = CaptureConfig {
         meeting_id,
         meeting_name,
@@ -124,80 +115,40 @@ async fn start_recording(
         event_tx,
     };
 
-    tokio::task::spawn_blocking(move || run_capture(config, stop_rx));
+    spawn_logged("audio-recording-worker", record_audio_loop(config, stop_rx));
 
-    Ok(ActiveRecording {
+    ActiveRecording {
         meeting_id,
         stop_tx,
-    })
+    }
 }
 
-fn stop_recording(recording: ActiveRecording) {
-    if recording.stop_tx.send(()).is_err() {
+async fn stop_recording(recording: ActiveRecording) {
+    if recording.stop_tx.send(()).await.is_err() {
         warn!(meeting_id = %recording.meeting_id, "audio capture worker already stopped");
     }
 }
 
-fn run_capture(config: CaptureConfig, stop_rx: mpsc::Receiver<()>) {
-    match capture_until_stopped(config, stop_rx) {
-        Ok(()) => {}
-        Err(error) => warn!(%error, "audio capture worker stopped with an error"),
+async fn record_audio_loop(config: CaptureConfig, mut stop_rx: mpsc::Receiver<()>) {
+    let backend = match select_recorder_backend() {
+        Some(backend) => backend,
+        None => {
+            warn!("no supported Linux audio recorder found; install PipeWire, PulseAudio, or ALSA recording tools");
+            return;
+        }
+    };
+    let directory = match default_data_dir() {
+        Ok(path) => path.join("recordings"),
+        Err(error) => {
+            warn!(%error, "failed to resolve recordings directory");
+            return;
+        }
+    };
+    if let Err(error) = fs::create_dir_all(&directory).await {
+        warn!(%error, path = %directory.display(), "failed to create recordings directory");
+        return;
     }
-}
 
-fn capture_until_stopped(config: CaptureConfig, stop_rx: mpsc::Receiver<()>) -> Result<(), String> {
-    let host = cpal::default_host();
-    let device = input_device(&host, &config.input_device)?;
-    let device_name = device.name().unwrap_or_else(|_| "unknown".to_owned());
-    let supported_config = device.default_input_config().map_err(|error| {
-        format!("failed to read default input config for {device_name}: {error}")
-    })?;
-    let sample_rate = supported_config.sample_rate().0;
-    let channels = supported_config.channels();
-    let (audio_tx, audio_rx) = mpsc::channel();
-    let stream_config = supported_config.config();
-    let sample_format = supported_config.sample_format();
-    let err_fn = |error| warn!(%error, "audio input stream error");
-
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &stream_config,
-            move |data: &[f32], _| send_samples(&audio_tx, data.iter().copied()),
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &stream_config,
-            move |data: &[i16], _| {
-                send_samples(
-                    &audio_tx,
-                    data.iter()
-                        .map(|sample| f32::from(*sample) / f32::from(i16::MAX)),
-                );
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            &stream_config,
-            move |data: &[u16], _| {
-                send_samples(
-                    &audio_tx,
-                    data.iter()
-                        .map(|sample| (f32::from(*sample) - 32768.0) / 32768.0),
-                );
-            },
-            err_fn,
-            None,
-        ),
-        other => return Err(format!("unsupported input sample format: {other:?}")),
-    }
-    .map_err(|error| format!("failed to build input stream for {device_name}: {error}"))?;
-
-    let mut writer = ChunkWriter::new(&config, sample_rate, channels)?;
-    stream
-        .play()
-        .map_err(|error| format!("failed to start input stream for {device_name}: {error}"))?;
     publish(
         &config.event_tx,
         AppEvent::RecordingStarted {
@@ -206,26 +157,41 @@ fn capture_until_stopped(config: CaptureConfig, stop_rx: mpsc::Receiver<()>) -> 
     );
     info!(
         meeting_id = %config.meeting_id,
-        device = %device_name,
-        sample_rate,
-        channels,
+        backend = ?backend,
         "audio recording started"
     );
 
+    let mut chunk_index = 1_u64;
     loop {
-        if stop_rx.try_recv().is_ok() {
+        let path = chunk_path(&directory, &config.meeting_name, chunk_index);
+        let stopped = match record_chunk(&config, backend, &path, &mut stop_rx).await {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                warn!(%error, path = %path.display(), "failed to record audio chunk");
+                true
+            }
+        };
+
+        if file_has_audio(&path).await {
+            publish(
+                &config.event_tx,
+                AppEvent::RecordingChunkReady {
+                    meeting_id: config.meeting_id,
+                    path,
+                },
+            );
+        } else if let Err(error) = fs::remove_file(&path).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                warn!(%error, path = %path.display(), "failed to remove empty recording chunk");
+            }
+        }
+
+        if stopped {
             break;
         }
-
-        match audio_rx.recv_timeout(STOP_POLL_INTERVAL) {
-            Ok(chunk) => writer.write_samples(&chunk.samples)?,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
+        chunk_index += 1;
     }
 
-    drop(stream);
-    writer.finish_current_chunk()?;
     publish(
         &config.event_tx,
         AppEvent::RecordingStopped {
@@ -233,162 +199,161 @@ fn capture_until_stopped(config: CaptureConfig, stop_rx: mpsc::Receiver<()>) -> 
         },
     );
     info!(meeting_id = %config.meeting_id, "audio recording stopped");
-    Ok(())
 }
 
-fn input_device(host: &cpal::Host, configured_name: &str) -> Result<cpal::Device, String> {
-    let configured_name = configured_name.trim();
-    if configured_name.is_empty() || configured_name.eq_ignore_ascii_case("default") {
-        return host
-            .default_input_device()
-            .ok_or_else(|| "no default input device is available".to_owned());
-    }
+async fn record_chunk(
+    config: &CaptureConfig,
+    backend: RecorderBackend,
+    path: &Path,
+    stop_rx: &mut mpsc::Receiver<()>,
+) -> Result<bool, String> {
+    let command = recorder_command(backend, &config.input_device, path);
+    let mut child = Command::new(command.program)
+        .args(command.args)
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("failed to launch recorder: {error}"))?;
+    let mut interval = tokio::time::interval(STOP_POLL_INTERVAL);
+    let duration = tokio::time::sleep(config.chunk_duration.max(STOP_POLL_INTERVAL));
+    tokio::pin!(duration);
 
-    let mut devices = host
-        .input_devices()
-        .map_err(|error| format!("failed to enumerate input devices: {error}"))?;
-
-    devices
-        .find(|device| {
-            device
-                .name()
-                .map(|name| name == configured_name || name.contains(configured_name))
-                .unwrap_or(false)
-        })
-        .ok_or_else(|| format!("input device not found: {configured_name}"))
-}
-
-fn send_samples(samples_tx: &mpsc::Sender<AudioChunk>, samples: impl Iterator<Item = f32>) {
-    let samples = samples.collect::<Vec<_>>();
-    if samples.is_empty() {
-        return;
-    }
-
-    if samples_tx.send(AudioChunk { samples }).is_err() {
-        warn!("audio writer stopped before input stream");
-    }
-}
-
-impl ChunkWriter {
-    fn new(config: &CaptureConfig, sample_rate: u32, channels: u16) -> Result<Self, String> {
-        let directory = default_data_dir()
-            .map_err(|error| error.to_string())?
-            .join("recordings");
-        fs::create_dir_all(&directory)
-            .map_err(|error| format!("failed to create recordings directory: {error}"))?;
-        let seconds = config.chunk_duration.as_secs().max(1);
-        let max_samples = u64::from(sample_rate) * u64::from(channels) * seconds;
-        let file_stem = format!(
-            "{}_{}",
-            unix_timestamp_seconds(),
-            safe_filename(&config.meeting_name)
-        );
-
-        let mut writer = Self {
-            directory,
-            file_stem,
-            sample_rate,
-            channels,
-            max_samples,
-            max_bytes: config.max_chunk_bytes,
-            event_tx: config.event_tx.clone(),
-            meeting_id: config.meeting_id,
-            chunk_index: 0,
-            samples_in_chunk: 0,
-            writer: None,
-            current_path: None,
-        };
-        writer.start_next_chunk()?;
-        Ok(writer)
-    }
-
-    fn write_samples(&mut self, samples: &[f32]) -> Result<(), String> {
-        for sample in samples {
-            if self.should_rotate() {
-                self.finish_current_chunk()?;
-                self.start_next_chunk()?;
+    loop {
+        tokio::select! {
+            status = child.wait() => {
+                let status = status.map_err(|error| format!("failed to wait for recorder: {error}"))?;
+                if !status.success() {
+                    return Err(format!("recorder exited with status {status}"));
+                }
+                return Ok(true);
             }
-
-            let writer = self
-                .writer
-                .as_mut()
-                .ok_or_else(|| "recording chunk writer is not open".to_owned())?;
-            writer
-                .write_sample(float_to_i16(*sample))
-                .map_err(|error| format!("failed to write audio sample: {error}"))?;
-            self.samples_in_chunk += 1;
+            _ = stop_rx.recv() => {
+                stop_child(&mut child).await;
+                return Ok(true);
+            }
+            _ = &mut duration => {
+                stop_child(&mut child).await;
+                return Ok(false);
+            }
+            _ = interval.tick() => {
+                if file_len(path).await >= config.max_chunk_bytes {
+                    stop_child(&mut child).await;
+                    return Ok(false);
+                }
+            }
         }
-
-        Ok(())
-    }
-
-    fn start_next_chunk(&mut self) -> Result<(), String> {
-        self.chunk_index += 1;
-        self.samples_in_chunk = 0;
-        let path = self.directory.join(format!(
-            "{}_chunk_{:04}.wav",
-            self.file_stem, self.chunk_index
-        ));
-        let spec = hound::WavSpec {
-            channels: self.channels,
-            sample_rate: self.sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let writer = hound::WavWriter::create(&path, spec)
-            .map_err(|error| format!("failed to create recording chunk: {error}"))?;
-        self.current_path = Some(path);
-        self.writer = Some(writer);
-        Ok(())
-    }
-
-    fn finish_current_chunk(&mut self) -> Result<(), String> {
-        let Some(writer) = self.writer.take() else {
-            return Ok(());
-        };
-        let Some(path) = self.current_path.take() else {
-            return Ok(());
-        };
-        let has_samples = self.samples_in_chunk > 0;
-        writer
-            .finalize()
-            .map_err(|error| format!("failed to finalise recording chunk: {error}"))?;
-
-        if has_samples {
-            publish(
-                &self.event_tx,
-                AppEvent::RecordingChunkReady {
-                    meeting_id: self.meeting_id,
-                    path,
-                },
-            );
-        } else if let Err(error) = fs::remove_file(&path) {
-            warn!(%error, path = %path.display(), "failed to remove empty recording chunk");
-        }
-        self.samples_in_chunk = 0;
-        Ok(())
-    }
-
-    fn should_rotate(&self) -> bool {
-        if self.samples_in_chunk >= self.max_samples {
-            return true;
-        }
-
-        self.current_path
-            .as_deref()
-            .and_then(file_len)
-            .map(|bytes| bytes >= self.max_bytes)
-            .unwrap_or(false)
     }
 }
 
-fn file_len(path: &Path) -> Option<u64> {
-    fs::metadata(path).map(|metadata| metadata.len()).ok()
+async fn stop_child(child: &mut tokio::process::Child) {
+    if let Err(error) = child.start_kill() {
+        warn!(%error, "failed to stop audio recorder");
+    }
+    if let Err(error) = child.wait().await {
+        warn!(%error, "failed to wait for stopped audio recorder");
+    }
 }
 
-fn float_to_i16(sample: f32) -> i16 {
-    let clamped = sample.clamp(-1.0, 1.0);
-    (clamped * f32::from(i16::MAX)).round() as i16
+fn select_recorder_backend() -> Option<RecorderBackend> {
+    [
+        (RecorderBackend::PipeWire, "pw-record"),
+        (RecorderBackend::PulseAudio, "parecord"),
+        (RecorderBackend::Alsa, "arecord"),
+    ]
+    .into_iter()
+    .find_map(|(backend, program)| executable_in_path(program).then_some(backend))
+}
+
+fn executable_in_path(program: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+
+    std::env::split_paths(&paths)
+        .map(|directory| directory.join(program))
+        .any(|candidate| candidate.is_file())
+}
+
+fn recorder_command(backend: RecorderBackend, input_device: &str, path: &Path) -> RecorderCommand {
+    let input_device = input_device.trim();
+    let configured_device =
+        !input_device.is_empty() && !input_device.eq_ignore_ascii_case("default");
+    let path = path.display().to_string();
+
+    match backend {
+        RecorderBackend::PipeWire => {
+            let mut args = vec![
+                "--rate".to_owned(),
+                RECORDING_SAMPLE_RATE.to_owned(),
+                "--channels".to_owned(),
+                RECORDING_CHANNELS.to_owned(),
+                "--format".to_owned(),
+                "s16".to_owned(),
+            ];
+            if configured_device {
+                args.extend(["--target".to_owned(), input_device.to_owned()]);
+            }
+            args.push(path);
+            RecorderCommand {
+                program: "pw-record",
+                args,
+            }
+        }
+        RecorderBackend::PulseAudio => {
+            let mut args = vec![
+                "--file-format=wav".to_owned(),
+                "--format=s16le".to_owned(),
+                format!("--rate={RECORDING_SAMPLE_RATE}"),
+                format!("--channels={RECORDING_CHANNELS}"),
+            ];
+            if configured_device {
+                args.push(format!("--device={input_device}"));
+            }
+            args.push(path);
+            RecorderCommand {
+                program: "parecord",
+                args,
+            }
+        }
+        RecorderBackend::Alsa => {
+            let mut args = vec![
+                "-f".to_owned(),
+                "S16_LE".to_owned(),
+                "-r".to_owned(),
+                RECORDING_SAMPLE_RATE.to_owned(),
+                "-c".to_owned(),
+                RECORDING_CHANNELS.to_owned(),
+                "-t".to_owned(),
+                "wav".to_owned(),
+            ];
+            if configured_device {
+                args.extend(["-D".to_owned(), input_device.to_owned()]);
+            }
+            args.push(path);
+            RecorderCommand {
+                program: "arecord",
+                args,
+            }
+        }
+    }
+}
+
+fn chunk_path(directory: &Path, meeting_name: &str, index: u64) -> PathBuf {
+    directory.join(format!(
+        "{}_{}_chunk_{index:04}.wav",
+        unix_timestamp_seconds(),
+        safe_filename(meeting_name)
+    ))
+}
+
+async fn file_has_audio(path: &Path) -> bool {
+    file_len(path).await > 44
+}
+
+async fn file_len(path: &Path) -> u64 {
+    fs::metadata(path)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
 }
 
 async fn load_settings(purpose: &'static str) -> Settings {
@@ -419,9 +384,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spec_005_float_to_i16_clamps_samples() {
-        assert_eq!(float_to_i16(2.0), i16::MAX);
-        assert_eq!(float_to_i16(-2.0), -i16::MAX);
-        assert_eq!(float_to_i16(0.0), 0);
+    fn spec_005_pipewire_command_uses_configured_target() {
+        let command = recorder_command(
+            RecorderBackend::PipeWire,
+            "alsa_input.pci.capture",
+            Path::new("/tmp/chunk.wav"),
+        );
+
+        assert_eq!(command.program, "pw-record");
+        assert!(command.args.contains(&"--target".to_owned()));
+        assert!(command.args.contains(&"alsa_input.pci.capture".to_owned()));
+        assert_eq!(
+            command.args.last().map(String::as_str),
+            Some("/tmp/chunk.wav")
+        );
+    }
+
+    #[test]
+    fn spec_005_alsa_default_device_omits_explicit_device() {
+        let command = recorder_command(RecorderBackend::Alsa, "default", Path::new("/tmp/a.wav"));
+
+        assert_eq!(command.program, "arecord");
+        assert!(!command.args.contains(&"-D".to_owned()));
     }
 }
