@@ -16,7 +16,7 @@ provider-llama-cpp = [
 
 [dependencies]
 encoding_rs = { version = "0.8.35", optional = true }
-hf-hub = { version = "1.0.0-rc.1", features = ["blocking"], optional = true }
+hf-hub = { version = "0.4.3", optional = true }
 llama-cpp-2 = { version = "0.1.146", optional = true }
 rustle-core = { path = "../rustle-core" }
 serde_json.workspace = true

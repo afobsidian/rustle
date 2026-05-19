@@ -16,6 +16,8 @@ use uuid::Uuid;
 const RECORDING_SAMPLE_RATE: &str = "16000";
 const RECORDING_CHANNELS: &str = "1";
 const STOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_CHUNK_DURATION_SECS: u64 = 24 * 60 * 60;
+const MAX_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 
 struct ActiveRecording {
     meeting_id: Uuid,
@@ -110,8 +112,8 @@ fn start_recording(
         meeting_id,
         meeting_name,
         input_device: settings.audio.input_device,
-        chunk_duration: Duration::from_secs(settings.audio.chunk_duration_minutes * 60),
-        max_chunk_bytes: settings.audio.max_recording_size_mb * 1024 * 1024,
+        chunk_duration: chunk_duration(settings.audio.chunk_duration_minutes),
+        max_chunk_bytes: recording_size_bytes(settings.audio.max_recording_size_mb),
         event_tx,
     };
 
@@ -270,7 +272,21 @@ fn executable_in_path(program: &str) -> bool {
 
     std::env::split_paths(&paths)
         .map(|directory| directory.join(program))
-        .any(|candidate| candidate.is_file())
+        .any(|candidate| is_executable_file(&candidate))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn recorder_command(backend: RecorderBackend, input_device: &str, path: &Path) -> RecorderCommand {
@@ -356,6 +372,17 @@ async fn file_len(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+fn chunk_duration(minutes: u64) -> Duration {
+    Duration::from_secs(minutes.saturating_mul(60).clamp(1, MAX_CHUNK_DURATION_SECS))
+}
+
+fn recording_size_bytes(megabytes: u64) -> u64 {
+    megabytes
+        .saturating_mul(1024)
+        .saturating_mul(1024)
+        .clamp(1, MAX_CHUNK_BYTES)
+}
+
 async fn load_settings(purpose: &'static str) -> Settings {
     match Settings::load().await {
         Ok(settings) => settings,
@@ -406,5 +433,36 @@ mod tests {
 
         assert_eq!(command.program, "arecord");
         assert!(!command.args.contains(&"-D".to_owned()));
+    }
+
+    #[test]
+    fn spec_005_audio_settings_arithmetic_is_saturating_and_clamped() {
+        assert_eq!(
+            chunk_duration(u64::MAX),
+            Duration::from_secs(MAX_CHUNK_DURATION_SECS)
+        );
+        assert_eq!(recording_size_bytes(u64::MAX), MAX_CHUNK_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spec_005_recorder_detection_requires_executable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "rustle-non-executable-recorder-{}",
+            unix_timestamp_seconds()
+        ));
+        std::fs::write(&path, "").expect("test file should be created");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("test file permissions should be set");
+
+        assert!(!is_executable_file(&path));
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("test file permissions should be made executable");
+        assert!(is_executable_file(&path));
+
+        std::fs::remove_file(path).expect("test file should be removed");
     }
 }

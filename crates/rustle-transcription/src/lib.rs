@@ -37,6 +37,7 @@ pub async fn initialise(
 
 async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
     let mut meetings = HashMap::new();
+    let mut settings = load_settings("audio transcription startup").await;
 
     loop {
         match event_rx.recv().await {
@@ -66,8 +67,7 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 }
             }
             Ok(AppEvent::RecordingChunkReady { meeting_id, path }) => {
-                let settings = load_settings("audio transcription").await;
-                let segments = match transcribe_audio_chunk(path.clone(), settings).await {
+                let segments = match transcribe_audio_chunk(path.clone(), settings.clone()).await {
                     Ok(segments) => segments,
                     Err(error) => {
                         warn!(%error, path = %path.display(), "failed to transcribe audio chunk");
@@ -123,6 +123,9 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                         segments,
                     },
                 );
+            }
+            Ok(AppEvent::SettingsChanged(updated_settings)) => {
+                settings = updated_settings.validated();
             }
             Ok(AppEvent::QuitRequested) => break,
             Ok(_) => {}
@@ -382,7 +385,7 @@ fn publish(event_tx: &EventSender, event: AppEvent) {
 }
 
 fn centiseconds_to_millis(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0) * 10
+    u64::try_from(value).unwrap_or(0).saturating_mul(10)
 }
 
 fn unix_timestamp_seconds() -> u64 {
@@ -414,5 +417,6 @@ mod tests {
     fn spec_006_centiseconds_are_converted_to_milliseconds() {
         assert_eq!(centiseconds_to_millis(42), 420);
         assert_eq!(centiseconds_to_millis(-1), 0);
+        assert_eq!(centiseconds_to_millis(i64::MAX), u64::MAX);
     }
 }

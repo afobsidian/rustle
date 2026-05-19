@@ -153,7 +153,7 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
 
 #[cfg(feature = "provider-llama-cpp")]
 fn model_path(settings: &Settings) -> Result<std::path::PathBuf, String> {
-    use hf_hub::HFClientSync;
+    use hf_hub::api::sync::Api;
 
     if !settings.ai.model_path.trim().is_empty() {
         return Ok(std::path::PathBuf::from(settings.ai.model_path.trim()));
@@ -174,16 +174,14 @@ fn model_path(settings: &Settings) -> Result<std::path::PathBuf, String> {
         );
     }
 
-    let (owner, name) = repo
-        .split_once('/')
-        .ok_or_else(|| format!("invalid Hugging Face model repo `{repo}`"))?;
-    let client = HFClientSync::new().map_err(|error| error.to_string())?;
+    if !repo.contains('/') {
+        return Err(format!("invalid Hugging Face model repo `{repo}`"));
+    }
+    let client = Api::new().map_err(|error| error.to_string())?;
 
     client
-        .model(owner, name)
-        .download_file()
-        .filename(file.to_owned())
-        .send()
+        .model(repo.to_owned())
+        .get(file)
         .map_err(|error| error.to_string())
 }
 
