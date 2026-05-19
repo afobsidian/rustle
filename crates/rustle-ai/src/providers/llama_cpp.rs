@@ -203,7 +203,9 @@ fn render_prompt(
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<String, String> {
-    let template = model.chat_template(None).map_err(|error| error.to_string())?;
+    let template = model
+        .chat_template(None)
+        .map_err(|error| error.to_string())?;
     let messages = [
         llama_cpp_2::model::LlamaChatMessage::new("system".to_owned(), system_prompt.to_owned())
             .map_err(|error| error.to_string())?,
@@ -235,7 +237,10 @@ fn looks_degenerate(output: &str) -> bool {
         return true;
     }
 
-    let unique = lines.iter().copied().collect::<std::collections::BTreeSet<_>>();
+    let unique = lines
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
     unique.len() * 3 <= lines.len()
 }
 

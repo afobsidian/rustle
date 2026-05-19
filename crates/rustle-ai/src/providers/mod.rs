@@ -76,7 +76,9 @@ mod tests {
 
         assert!(notes.markdown.contains("## Warning"));
         assert!(notes.markdown.contains("Full transcript saved instead"));
-        assert!(notes.markdown.contains("Alex: We agreed to keep the manual transcript flow for the MVP."));
+        assert!(notes
+            .markdown
+            .contains("Alex: We agreed to keep the manual transcript flow for the MVP."));
     }
 
     #[test]

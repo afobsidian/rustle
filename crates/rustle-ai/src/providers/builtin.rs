@@ -8,8 +8,7 @@ pub(crate) fn summarise_with_reason(transcript: &str, reason: impl AsRef<str>) -
     );
     let markdown = format!(
         "# Meeting Notes\n\n## Warning\n\n{}\n\n## Transcript\n\n{}\n",
-        warning,
-        transcript
+        warning, transcript
     );
 
     MeetingNotes {
