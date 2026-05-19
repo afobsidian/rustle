@@ -69,6 +69,22 @@ pub enum AppEvent {
         /// Structured meeting notes.
         notes: MeetingNotes,
     },
+    /// The notes view should be opened.
+    OpenNotesRequested,
+    /// A manual transcript draft has been created for a meeting.
+    TranscriptDraftReady {
+        /// Meeting identifier associated with the transcript draft.
+        meeting_id: Uuid,
+        /// Filesystem path to the editable transcript draft.
+        path: PathBuf,
+    },
+    /// Meeting notes have been persisted.
+    NoteSaved {
+        /// Meeting identifier associated with the saved note.
+        meeting_id: Uuid,
+        /// Filesystem path to the saved Markdown note.
+        path: PathBuf,
+    },
     /// Settings have changed and should be reloaded by subscribers.
     SettingsChanged(Settings),
     /// The application should shut down.

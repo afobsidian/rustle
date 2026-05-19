@@ -1,4 +1,5 @@
 # Granola Clone – Specification Document
+
 > Platform: Linux (Fedora / Hyprland · Wayland)  
 > Language: Rust  
 > Purpose: AI-powered meeting notes app with system tray presence and Teams auto-launch
@@ -26,12 +27,14 @@ A Rust-native desktop application that sits in the system tray, automatically de
 ```
 
 **Key crates (expected):**
+
 - `tray-icon` – system tray (Wayland/X11)
 - `ksni` or `zbus` – StatusNotifierItem DBus protocol (Wayland tray)
 - `serde` / `serde_json` / `toml` – config serialisation
 - `tokio` – async runtime
 - `cpal` – cross-platform audio capture
 - `whisper-rs` or `openai` – transcription
+- `llama-cpp-2` – in-process local AI note generation
 - `rusqlite` – local note persistence
 - `dbus` (via `zbus`) – system integration, Teams detection
 - `notify` – filesystem watching (for Teams process/socket detection)
@@ -48,9 +51,11 @@ A Rust-native desktop application that sits in the system tray, automatically de
 **Priority:** P0
 
 #### Description
+
 The application must start without showing any window. The only initial UI is a tray icon in the system notification area (StatusNotifierItem on Wayland/Hyprland).
 
 #### Acceptance Criteria
+
 - [ ] App launches and registers a StatusNotifierItem via DBus within 2 seconds
 - [ ] No window is created at startup
 - [ ] A tray icon (SVG or PNG, ≥22×22px) is visible in Waybar / other SNI-compatible bars
@@ -58,6 +63,7 @@ The application must start without showing any window. The only initial UI is a 
 - [ ] Process is identifiable as `granola` in `ps aux`
 
 #### Technical Notes
+
 - Use `ksni` crate for StatusNotifierItem DBus registration
 - Icon path resolved via XDG data dirs (`~/.local/share/granola/icons/`)
 - Log to `~/.local/share/granola/granola.log` using `tracing` + `tracing-subscriber`
@@ -71,9 +77,11 @@ The application must start without showing any window. The only initial UI is a 
 **Priority:** P0
 
 #### Description
+
 The app must support enabling/disabling automatic startup on login via the XDG autostart spec, without requiring systemd user services (though that should be an option).
 
 #### Acceptance Criteria
+
 - [ ] Settings toggle "Start on login" creates `~/.config/autostart/granola.desktop` when enabled
 - [ ] Toggling off removes the `.desktop` file
 - [ ] The `.desktop` file correctly uses `Exec=granola --tray` and `X-GNOME-Autostart-enabled=true`
@@ -81,6 +89,7 @@ The app must support enabling/disabling automatic startup on login via the XDG a
 - [ ] Both methods are mutually exclusive in settings
 
 #### Technical Notes
+
 ```ini
 # ~/.config/autostart/granola.desktop
 [Desktop Entry]
@@ -100,9 +109,11 @@ X-GNOME-Autostart-enabled=true
 **Priority:** P0
 
 #### Description
+
 Right-clicking the tray icon opens a context menu with core actions.
 
 #### Acceptance Criteria
+
 - [ ] Menu contains: **Open Notes**, **Current Meeting** (greyed out if none), **Settings**, **Quit**
 - [ ] "Current Meeting" shows active meeting name when a Teams meeting is detected
 - [ ] Left-click on tray icon opens the Notes window
@@ -110,6 +121,7 @@ Right-clicking the tray icon opens a context menu with core actions.
 - [ ] All menu items have keyboard-accessible mnemonics
 
 #### Menu Structure
+
 ```
 [Granola Icon]
 ├── 📋 Open Notes
@@ -128,9 +140,11 @@ Right-clicking the tray icon opens a context menu with core actions.
 **Priority:** P0
 
 #### Description
+
 The app must detect when the user joins a Microsoft Teams meeting and optionally auto-start recording/note-taking.
 
 #### Acceptance Criteria
+
 - [ ] Detects Teams for Linux process (`teams`, `teams-insiders`, or `msedge` running `teams.microsoft.com`) via `/proc` polling or DBus
 - [ ] Detects active audio capture by Teams (indicating an active call) via PipeWire/PulseAudio stream enumeration
 - [ ] Emits an internal `MeetingStarted { name: String, source: DetectionSource }` event within 5 seconds of meeting join
@@ -139,11 +153,13 @@ The app must detect when the user joins a Microsoft Teams meeting and optionally
 - [ ] Meeting name extracted where possible (window title parsing via Hyprland IPC socket)
 
 #### Detection Strategy (priority order)
+
 1. **Hyprland IPC** – query `hyprctl clients` JSON for window with title matching `| Microsoft Teams` or `teams.microsoft.com`
 2. **PipeWire stream** – enumerate streams; detect Teams-owned audio input stream becoming active
 3. **Process polling** – fallback `/proc` scan every 5s
 
 #### Technical Notes
+
 - Hyprland IPC socket: `$HYPRLAND_INSTANCE_SIGNATURE` → `/tmp/hypr/$SIG/.socket2.sock`
 - Use `tokio::net::UnixStream` to subscribe to Hyprland socket2 events
 - PipeWire enumeration via `pipewire` crate or `pw-dump` subprocess
@@ -157,9 +173,11 @@ The app must detect when the user joins a Microsoft Teams meeting and optionally
 **Priority:** P1
 
 #### Description
+
 When a meeting is detected (and the user has enabled auto-capture), the app captures audio from the default input device or a selected loopback source.
 
 #### Acceptance Criteria
+
 - [ ] Captures audio from a configurable PipeWire/PulseAudio source (default: default input device)
 - [ ] Supports loopback capture (meeting audio output) via virtual sink if configured
 - [ ] Audio is buffered to a temp file in `~/.local/share/granola/recordings/`
@@ -169,6 +187,7 @@ When a meeting is detected (and the user has enabled auto-capture), the app capt
 - [ ] Max recording size limit configurable (default: 2GB); older chunks rotated
 
 #### Technical Notes
+
 - Use `cpal` with PipeWire backend
 - Store as 16kHz mono WAV (optimal for Whisper transcription)
 - Chunk recordings into 10-minute segments for incremental transcription
@@ -182,9 +201,11 @@ When a meeting is detected (and the user has enabled auto-capture), the app capt
 **Priority:** P1
 
 #### Description
+
 Captured audio is transcribed to text, either locally via Whisper or via a remote API.
 
 #### Acceptance Criteria
+
 - [ ] Local transcription supported via `whisper-rs` (bundled `ggml` model)
 - [ ] Remote transcription supported via OpenAI Whisper API (requires API key in settings)
 - [ ] Transcription runs on audio chunks as they complete (streaming-style)
@@ -202,12 +223,14 @@ Captured audio is transcribed to text, either locally via Whisper or via a remot
 **Priority:** P1
 
 #### Description
+
 Transcription text is passed to an LLM to produce structured meeting notes.
 
 #### Acceptance Criteria
+
 - [ ] Notes generated at end of meeting (or on demand mid-meeting)
 - [ ] Output includes: **Summary**, **Key Decisions**, **Action Items**, **Attendees** (if detectable)
-- [ ] LLM provider configurable: `openai` (GPT-4o) | `anthropic` (Claude) | `ollama` (local)
+- [ ] AI provider configurable: `llama_cpp` (local llama.cpp) | `openai` (GPT-4o) | `anthropic` (Claude) | `ollama` (local)
 - [ ] System prompt configurable by user in settings
 - [ ] Notes saved as Markdown to `~/.local/share/granola/notes/YYYY-MM-DD_<meeting-name>.md`
 - [ ] Notes also stored in SQLite for search
@@ -221,9 +244,11 @@ Transcription text is passed to an LLM to produce structured meeting notes.
 **Priority:** P1
 
 #### Description
+
 A native window for browsing, searching, and editing past meeting notes.
 
 #### Acceptance Criteria
+
 - [ ] Window opens on tray left-click or "Open Notes" menu item
 - [ ] Lists all past meetings sorted by date descending
 - [ ] Full-text search across all notes
@@ -233,6 +258,7 @@ A native window for browsing, searching, and editing past meeting notes.
 - [ ] Window is a standard Wayland toplevel (not a popup/overlay)
 
 #### Technical Notes
+
 - UI framework: `iced` (preferred, pure Rust, Wayland-native) or `egui`
 - Markdown rendering: `pulldown-cmark` → HTML → embedded webview, or native renderer
 
@@ -245,15 +271,18 @@ A native window for browsing, searching, and editing past meeting notes.
 **Priority:** P0
 
 #### Description
+
 All user-configurable options are stored and editable via a settings window.
 
 #### Acceptance Criteria
+
 - [ ] Settings stored as TOML at `~/.config/granola/config.toml`
 - [ ] Settings window accessible from tray menu
 - [ ] All settings have sensible defaults; app works out-of-the-box with no settings changes
 - [ ] Settings are validated on load; invalid values fall back to defaults with a warning log
 
 #### Settings Schema
+
 ```toml
 [general]
 start_on_login = false
@@ -296,9 +325,11 @@ db_path = "~/.local/share/granola/granola.db"
 **Priority:** P1
 
 #### Description
+
 The app sends desktop notifications for key events.
 
 #### Acceptance Criteria
+
 - [ ] Notification on meeting detected: "📅 Teams meeting detected – recording started"
 - [ ] Notification on meeting ended: "✅ Notes ready for <meeting name>"
 - [ ] Notification on transcription/AI error
@@ -315,9 +346,11 @@ The app sends desktop notifications for key events.
 **Priority:** P1
 
 #### Description
+
 Deep integration with Hyprland for window detection and workspace awareness.
 
 #### Acceptance Criteria
+
 - [ ] Subscribes to Hyprland socket2 event stream for `openwindow`, `closewindow`, `windowtitle` events
 - [ ] Correctly resolves `$HYPRLAND_INSTANCE_SIGNATURE` at runtime
 - [ ] Handles Hyprland restart gracefully (reconnects to new socket)
@@ -332,9 +365,11 @@ Deep integration with Hyprland for window detection and workspace awareness.
 **Priority:** P1
 
 #### Description
+
 The app must not crash due to transient failures in external services.
 
 #### Acceptance Criteria
+
 - [ ] All external I/O (DBus, PipeWire, Hyprland IPC, API calls) wrapped in retry logic with exponential backoff
 - [ ] Panic handler installed via `std::panic::set_hook`; panics logged before process exits
 - [ ] If transcription fails, raw audio file preserved for manual retry
@@ -355,15 +390,15 @@ The app must not crash due to transient failures in external services.
 
 ## 5. Test Strategy
 
-| Spec | Unit | Integration | Manual |
-|------|------|-------------|--------|
-| SPEC-001 | Tray registration mock | DBus roundtrip test | Visual tray check |
-| SPEC-002 | File write/delete | Desktop file parse | Login smoke test |
-| SPEC-004 | Detection logic unit tests | Hyprland socket mock | Live Teams call |
-| SPEC-005 | Audio buffer chunking | cpal device enumeration | Record + playback |
-| SPEC-006 | Segment parsing | Whisper model load | Transcribe sample WAV |
-| SPEC-007 | Prompt construction | API mock | Review generated notes |
-| SPEC-009 | TOML parse/validate | Config round-trip | Settings UI smoke |
+| Spec     | Unit                       | Integration             | Manual                 |
+| -------- | -------------------------- | ----------------------- | ---------------------- |
+| SPEC-001 | Tray registration mock     | DBus roundtrip test     | Visual tray check      |
+| SPEC-002 | File write/delete          | Desktop file parse      | Login smoke test       |
+| SPEC-004 | Detection logic unit tests | Hyprland socket mock    | Live Teams call        |
+| SPEC-005 | Audio buffer chunking      | cpal device enumeration | Record + playback      |
+| SPEC-006 | Segment parsing            | Whisper model load      | Transcribe sample WAV  |
+| SPEC-007 | Prompt construction        | API mock                | Review generated notes |
+| SPEC-009 | TOML parse/validate        | Config round-trip       | Settings UI smoke      |
 
 ---
 

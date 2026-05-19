@@ -34,8 +34,14 @@ fn spec_009_defaults_match_persistent_settings_schema() {
         "~/.local/share/rustle/models/ggml-base.en.bin"
     );
     assert_eq!(settings.transcription.openai_api_key, "");
-    assert_eq!(settings.ai.provider, AiProvider::Openai);
-    assert_eq!(settings.ai.model, "gpt-4o");
+    assert_eq!(settings.ai.provider, AiProvider::LlamaCpp);
+    assert_eq!(settings.ai.model, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+    assert_eq!(settings.ai.model_path, "");
+    assert_eq!(settings.ai.hf_repo, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+    assert_eq!(
+        settings.ai.hf_model_file,
+        "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+    );
     assert_eq!(settings.ai.api_key, "");
     assert_eq!(settings.ai.ollama_url, "http://localhost:11434");
     assert!(settings
@@ -44,6 +50,32 @@ fn spec_009_defaults_match_persistent_settings_schema() {
         .contains("meeting notes assistant"));
     assert_eq!(settings.storage.notes_dir, "~/.local/share/rustle/notes");
     assert_eq!(settings.storage.db_path, "~/.local/share/rustle/rustle.db");
+}
+
+#[tokio::test]
+async fn spec_009_ai_provider_variants_parse_from_toml() {
+    for (provider, expected) in [
+        ("llama_cpp", AiProvider::LlamaCpp),
+        ("llama-cpp-2", AiProvider::LlamaCpp),
+        ("ollama", AiProvider::Ollama),
+        ("openai", AiProvider::Openai),
+        ("anthropic", AiProvider::Anthropic),
+    ] {
+        let path = temp_config_path(provider);
+        let parent = path.parent().expect("settings path should have parent");
+        std::fs::create_dir_all(parent).expect("settings temp dir should be created");
+        std::fs::write(&path, format!("[ai]\nprovider = '{provider}'\n"))
+            .expect("provider settings should be written");
+
+        let settings = Settings::load_from_path(&path)
+            .await
+            .expect("provider settings should load");
+
+        assert_eq!(settings.ai.provider, expected);
+
+        std::fs::remove_file(&path).expect("settings file should be removed");
+        std::fs::remove_dir_all(parent).expect("settings temp dir should be removed");
+    }
 }
 
 #[tokio::test]

@@ -125,9 +125,15 @@ pub struct AiSettings {
     pub provider: AiProvider,
     /// Provider model name.
     pub model: String,
+    /// Optional local model path for providers that load files directly.
+    pub model_path: String,
+    /// Optional Hugging Face repository for providers that can download models.
+    pub hf_repo: String,
+    /// Optional Hugging Face model file name to download from `hf_repo`.
+    pub hf_model_file: String,
     /// API key for hosted providers.
     pub api_key: String,
-    /// Ollama endpoint URL.
+    /// Ollama endpoint URL, used only when `provider = "ollama"`.
     pub ollama_url: String,
     /// User-configurable system prompt for note generation.
     pub system_prompt: String,
@@ -137,8 +143,11 @@ pub struct AiSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AiProvider {
-    /// OpenAI chat completions.
+    /// llama.cpp local inference through llama-cpp-2 bindings.
     #[default]
+    #[serde(rename = "llama_cpp", alias = "llama-cpp-2", alias = "llamacpp")]
+    LlamaCpp,
+    /// OpenAI chat completions.
     Openai,
     /// Anthropic Claude.
     Anthropic,
@@ -311,8 +320,11 @@ impl Default for TranscriptionSettings {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
-            provider: AiProvider::Openai,
-            model: "gpt-4o".to_owned(),
+            provider: AiProvider::LlamaCpp,
+            model: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_owned(),
+            model_path: String::new(),
+            hf_repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_owned(),
+            hf_model_file: "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_owned(),
             api_key: String::new(),
             ollama_url: "http://localhost:11434".to_owned(),
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_owned(),
@@ -414,7 +426,8 @@ mod tests {
         assert!(settings.meeting.auto_capture);
         assert_eq!(settings.audio.max_recording_size_mb, 2048);
         assert_eq!(settings.audio.chunk_duration_minutes, 10);
-        assert_eq!(settings.ai.model, "gpt-4o");
+        assert_eq!(settings.ai.provider, AiProvider::LlamaCpp);
+        assert_eq!(settings.ai.model, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
     }
 
     #[test]
