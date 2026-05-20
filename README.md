@@ -6,20 +6,24 @@ Rust-native desktop meeting notes app for Fedora Linux on Hyprland/Wayland.
 
 See [docs/specification.md](docs/specification.md) for the product and technical specification.
 
-## Run the manual notes MVP
+## Run Rustle
 
-The current working slice is a terminal-controlled notes flow. It keeps the process alive, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes.
+Rustle starts as a StatusNotifierItem system tray app on Wayland/Hyprland systems with SNI host support such as Waybar. It keeps terminal controls as a fallback when a tray host or D-Bus is unavailable, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes.
 
 ```sh
 make run
 ```
 
-Available commands while Rustle is running:
+Tray actions include opening notes, opening the latest transcript draft, starting or stopping a manual meeting, opening the settings TOML file, and quitting Rustle. Left-clicking the tray icon opens notes.
+
+Available fallback terminal commands while Rustle is running:
 
 ```text
 start [meeting name]
 stop
 open
+transcript
+settings
 quit
 help
 ```
@@ -46,11 +50,11 @@ hf_repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
 hf_model_file = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
 ```
 
-Ollama remains available as an optional provider by setting `provider = "ollama"`. If the configured AI provider is unavailable, Rustle still saves fallback notes with the raw transcript. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/`.
+Ollama remains available as an optional provider by setting `provider = "ollama"`. If the configured AI provider is unavailable, Rustle still saves fallback notes with the raw transcript. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/`. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
 
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
-The tray, Teams detection, and native notes window are still future work; this MVP wires the application lifecycle, audio-backed transcription, and note-generation pipeline so it can be exercised end to end.
+Teams detection and a native notes window are still future work; the current app wires tray controls, application lifecycle, audio-backed transcription, and note-generation pipeline so it can be exercised end to end.
 
 ## DevOps
 

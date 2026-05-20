@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+ksni = "0.3.4"
 rustle-core = { path = "../rustle-core" }
 tokio.workspace = true
 tracing.workspace = true

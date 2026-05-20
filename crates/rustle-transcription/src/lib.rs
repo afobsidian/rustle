@@ -86,13 +86,9 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
             }
             Ok(AppEvent::MeetingEnded { id }) => {
                 let Some(meeting) = meetings.remove(&id) else {
-                    warn!(meeting_id = %id, "meeting ended without a transcript draft");
-                    publish(
-                        &event_tx,
-                        AppEvent::TranscriptionReady {
-                            meeting_id: id,
-                            segments: Vec::new(),
-                        },
+                    warn!(
+                        meeting_id = %id,
+                        "ignoring duplicate meeting end without an active transcript draft"
                     );
                     continue;
                 };
