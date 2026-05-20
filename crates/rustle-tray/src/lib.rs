@@ -5,13 +5,12 @@ use std::path::PathBuf;
 use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Category, Handle, MenuItem, Status, ToolTip, Tray, TrayMethods};
 use rustle_core::{
-    tasks::spawn_logged, AppEvent, CoreError, DetectionSource, EventReceiver, EventSender,
+    default_data_dir, tasks::spawn_logged, AppEvent, CoreError, DetectionSource, EventReceiver,
+    EventSender,
 };
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 use uuid::Uuid;
-
-const ICON_THEME_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons");
 
 #[derive(Clone)]
 struct RustleTray {
@@ -78,7 +77,9 @@ impl Tray for RustleTray {
     }
 
     fn icon_theme_path(&self) -> String {
-        ICON_THEME_PATH.to_owned()
+        resolve_icon_theme_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
     }
 
     fn icon_name(&self) -> String {
@@ -390,4 +391,53 @@ fn unix_timestamp_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+fn resolve_icon_theme_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = default_data_dir() {
+        candidates.push(path.join("icons"));
+    }
+
+    let mut shared_data_dirs = std::env::var_os("XDG_DATA_DIRS")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .filter(|paths| !paths.is_empty())
+        .unwrap_or_else(|| {
+            vec![
+                PathBuf::from("/usr/local/share"),
+                PathBuf::from("/usr/share"),
+            ]
+        });
+    candidates.extend(
+        shared_data_dirs
+            .drain(..)
+            .map(|path| path.join("rustle/icons")),
+    );
+
+    resolve_icon_theme_path_from_candidates(candidates)
+}
+
+fn resolve_icon_theme_path_from_candidates(
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Option<PathBuf> {
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_icon_theme_path_from_candidates;
+
+    #[test]
+    fn uses_first_existing_icon_path_candidate() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rustle-tray-test-{}", uuid::Uuid::new_v4()));
+        let icon_dir = temp_root.join("rustle/icons");
+        std::fs::create_dir_all(&icon_dir).unwrap();
+        let missing_dir = temp_root.join("missing");
+        let resolved = resolve_icon_theme_path_from_candidates([missing_dir, icon_dir.clone()]);
+
+        assert_eq!(resolved, Some(icon_dir));
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
 }
