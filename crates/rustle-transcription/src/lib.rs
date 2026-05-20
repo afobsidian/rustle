@@ -1,23 +1,27 @@
 //! Transcription crate for Rustle.
 
 use std::collections::HashMap;
+use std::fs as std_fs;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::time::Instant;
 
 use rustle_core::{
     default_data_dir, expand_tilde, safe_filename, tasks::spawn_logged, AppEvent, CoreError,
     EventReceiver, EventSender, Settings, TranscriptSegment, TranscriptionMethod,
 };
 use tokio::fs;
-use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
+const DEFAULT_WHISPER_REPO: &str = "ggerganov/whisper.cpp";
+const DEFAULT_WHISPER_MODEL_FILE: &str = "ggml-base.en.bin";
+const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
 
 struct MeetingTranscript {
     path: PathBuf,
     segments: Vec<TranscriptSegment>,
+    test_audio_path: Option<PathBuf>,
 }
 
 /// Initialises the transcription component with the shared application event bus.
@@ -25,6 +29,8 @@ pub async fn initialise(
     event_tx: EventSender,
     event_rx: Option<EventReceiver>,
 ) -> Result<(), CoreError> {
+    whisper_rs::install_logging_hooks();
+
     if let Some(receiver) = event_rx {
         spawn_logged(
             "audio-transcription-loop",
@@ -45,11 +51,19 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 info!(?source, meeting = %name, "creating transcript draft");
                 match create_transcript_draft(&name).await {
                     Ok(path) => {
+                        let test_audio_path = test_audio_path_from_env();
+                        if let Some(test_audio_path) = &test_audio_path {
+                            info!(
+                                path = %test_audio_path.display(),
+                                "test audio fixture configured for transcription"
+                            );
+                        }
                         meetings.insert(
                             id,
                             MeetingTranscript {
                                 path: path.clone(),
                                 segments: Vec::new(),
+                                test_audio_path,
                             },
                         );
                         publish(
@@ -59,7 +73,7 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                                 path: path.clone(),
                             },
                         );
-                        open_path(&path).await;
+                        info!(path = %path.display(), "transcript draft path");
                     }
                     Err(error) => {
                         warn!(%error, meeting = %name, "failed to create transcript draft")
@@ -94,6 +108,14 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 };
 
                 let mut segments = meeting.segments;
+                if segments.is_empty() {
+                    if let Some(test_audio_path) = meeting.test_audio_path {
+                        segments = transcribe_test_audio(test_audio_path, settings.clone()).await;
+                        if let Err(error) = append_segments(&meeting.path, &segments).await {
+                            warn!(%error, path = %meeting.path.display(), "failed to append test audio transcript segments");
+                        }
+                    }
+                }
                 match fs::read_to_string(&meeting.path).await {
                     Ok(content) => {
                         let manual_segments = transcript_segments(content);
@@ -171,23 +193,40 @@ fn transcribe_audio_chunk_blocking(
     }
 }
 
+async fn transcribe_test_audio(path: PathBuf, settings: Settings) -> Vec<TranscriptSegment> {
+    info!(path = %path.display(), "transcribing test audio fixture");
+    match transcribe_audio_chunk(path.clone(), settings).await {
+        Ok(segments) => segments,
+        Err(error) => {
+            warn!(%error, path = %path.display(), "failed to transcribe test audio fixture");
+            vec![recording_fallback_segment(&path, &error)]
+        }
+    }
+}
+
 fn transcribe_with_whisper(
     path: &Path,
     settings: &Settings,
 ) -> Result<Vec<TranscriptSegment>, String> {
-    let model_path =
-        expand_tilde(&settings.transcription.model_path).map_err(|error| error.to_string())?;
-    if !model_path.is_file() {
-        return Err(format!(
-            "Whisper model not found at {}; set transcription.model_path to a ggml model",
-            model_path.display()
-        ));
-    }
+    let model_path = resolve_whisper_model_path(settings)?;
 
     let audio = read_wav_as_whisper_audio(path)?;
     if audio.is_empty() {
         return Ok(Vec::new());
     }
+
+    let audio_duration_secs = audio.len() as f64 / f64::from(WHISPER_SAMPLE_RATE);
+    info!(
+        path = %path.display(),
+        duration_secs = audio_duration_secs,
+        "local transcription started"
+    );
+    debug!(
+        path = %path.display(),
+        model_path = %model_path.display(),
+        samples = audio.len(),
+        "loading Whisper model"
+    );
 
     let model_path = model_path
         .to_str()
@@ -203,12 +242,28 @@ fn transcribe_with_whisper(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    params.set_progress_callback_safe({
+        let mut last_info_progress = 0;
+        let mut last_debug_progress = 0;
+        move |progress: i32| {
+            let progress = progress.clamp(0, 100);
+            if progress >= last_debug_progress + 5 || progress == 100 {
+                debug!(progress_percent = progress, "local transcription progress");
+                last_debug_progress = progress;
+            }
+            if progress >= last_info_progress + 25 || progress == 100 {
+                info!(progress_percent = progress, "local transcription progress");
+                last_info_progress = progress;
+            }
+        }
+    });
 
+    let started_at = Instant::now();
     state
         .full(params, &audio)
         .map_err(|error| format!("failed to run Whisper transcription: {error}"))?;
 
-    let segments = state
+    let segments: Vec<TranscriptSegment> = state
         .as_iter()
         .filter_map(|segment| {
             let text = segment.to_str_lossy().ok()?.trim().to_owned();
@@ -224,7 +279,106 @@ fn transcribe_with_whisper(
         })
         .collect();
 
+    info!(
+        path = %path.display(),
+        segments = segments.len(),
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "local transcription finished"
+    );
+
     Ok(segments)
+}
+
+fn resolve_whisper_model_path(settings: &Settings) -> Result<PathBuf, String> {
+    let configured_path = settings.transcription.model_path.trim();
+    let model_path = expand_tilde(configured_path).map_err(|error| error.to_string())?;
+    if model_path.is_file() {
+        return Ok(model_path);
+    }
+
+    if is_default_transcription_model_path(configured_path) {
+        return download_default_whisper_model(&model_path);
+    }
+
+    Err(format!(
+        "Whisper model not found at {}; set transcription.model_path to a ggml model",
+        model_path.display()
+    ))
+}
+
+fn download_default_whisper_model(destination: &Path) -> Result<PathBuf, String> {
+    use hf_hub::api::sync::Api;
+
+    info!(
+        path = %destination.display(),
+        repo = DEFAULT_WHISPER_REPO,
+        file = DEFAULT_WHISPER_MODEL_FILE,
+        "default Whisper model missing; downloading"
+    );
+
+    if let Some(parent) = destination.parent() {
+        std_fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create Whisper model directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    if destination.is_file() {
+        return Ok(destination.to_path_buf());
+    }
+
+    let cached_path = Api::new()
+        .map_err(|error| format!("failed to initialise Hugging Face client: {error}"))?
+        .model(DEFAULT_WHISPER_REPO.to_owned())
+        .get(DEFAULT_WHISPER_MODEL_FILE)
+        .map_err(|error| format!("failed to download default Whisper model: {error}"))?;
+
+    if cached_path != destination {
+        std_fs::copy(&cached_path, destination).map_err(|error| {
+            format!(
+                "failed to copy Whisper model from {} to {}: {error}",
+                cached_path.display(),
+                destination.display()
+            )
+        })?;
+    }
+
+    info!(path = %destination.display(), "default Whisper model ready");
+    Ok(destination.to_path_buf())
+}
+
+fn is_default_transcription_model_path(configured_path: &str) -> bool {
+    configured_path == Settings::default().transcription.model_path
+}
+
+fn test_audio_path_from_env() -> Option<PathBuf> {
+    match std::env::var(TEST_AUDIO_FILE_ENV) {
+        Ok(value) => match test_audio_path_from_value(&value) {
+            Ok(path) => path,
+            Err(error) => {
+                warn!(%error, env = TEST_AUDIO_FILE_ENV, "ignoring test audio fixture");
+                None
+            }
+        },
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => {
+            warn!(%error, env = TEST_AUDIO_FILE_ENV, "ignoring test audio fixture");
+            None
+        }
+    }
+}
+
+fn test_audio_path_from_value(value: &str) -> Result<Option<PathBuf>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    expand_tilde(value)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn read_wav_as_whisper_audio(path: &Path) -> Result<Vec<f32>, String> {
@@ -351,19 +505,6 @@ fn transcript_segments(transcript: String) -> Vec<TranscriptSegment> {
     }]
 }
 
-async fn open_path(path: &PathBuf) {
-    match Command::new("xdg-open")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(_child) => info!(path = %path.display(), "opened transcript draft"),
-        Err(error) => warn!(%error, path = %path.display(), "failed to open transcript draft"),
-    }
-}
-
 async fn load_settings(purpose: &'static str) -> Settings {
     match Settings::load().await {
         Ok(settings) => settings,
@@ -414,5 +555,28 @@ mod tests {
         assert_eq!(centiseconds_to_millis(42), 420);
         assert_eq!(centiseconds_to_millis(-1), 0);
         assert_eq!(centiseconds_to_millis(i64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn spec_006_default_model_path_is_auto_downloadable() {
+        assert!(is_default_transcription_model_path(
+            &Settings::default().transcription.model_path
+        ));
+        assert!(!is_default_transcription_model_path(
+            "/tmp/custom-whisper-model.bin"
+        ));
+    }
+
+    #[test]
+    fn spec_006_empty_test_audio_env_is_ignored() {
+        assert_eq!(test_audio_path_from_value("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn spec_006_test_audio_env_resolves_path() {
+        assert_eq!(
+            test_audio_path_from_value("/tmp/rustle-fixture.wav").unwrap(),
+            Some(PathBuf::from("/tmp/rustle-fixture.wav"))
+        );
     }
 }

@@ -35,13 +35,10 @@ fn spec_009_defaults_match_persistent_settings_schema() {
     );
     assert_eq!(settings.transcription.openai_api_key, "");
     assert_eq!(settings.ai.provider, AiProvider::LlamaCpp);
-    assert_eq!(settings.ai.model, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+    assert_eq!(settings.ai.model, "Qwen/Qwen2.5-3B-Instruct-GGUF");
     assert_eq!(settings.ai.model_path, "");
-    assert_eq!(settings.ai.hf_repo, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
-    assert_eq!(
-        settings.ai.hf_model_file,
-        "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-    );
+    assert_eq!(settings.ai.hf_repo, "Qwen/Qwen2.5-3B-Instruct-GGUF");
+    assert_eq!(settings.ai.hf_model_file, "qwen2.5-3b-instruct-q4_k_m.gguf");
     assert_eq!(settings.ai.api_key, "");
     assert_eq!(settings.ai.ollama_url, "http://localhost:11434");
     assert!(settings

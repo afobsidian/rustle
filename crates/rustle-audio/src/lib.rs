@@ -18,6 +18,7 @@ const RECORDING_CHANNELS: &str = "1";
 const STOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CHUNK_DURATION_SECS: u64 = 24 * 60 * 60;
 const MAX_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
+const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
 
 struct ActiveRecording {
     meeting_id: Uuid,
@@ -65,6 +66,10 @@ async fn audio_capture_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
             Ok(AppEvent::MeetingStarted { id, name, .. }) => {
                 if active.is_some() {
                     warn!("audio capture already has an active meeting");
+                    continue;
+                }
+                if test_audio_file_configured() {
+                    info!(meeting = %name, env = TEST_AUDIO_FILE_ENV, "test audio fixture configured; skipping live audio capture");
                     continue;
                 }
 
@@ -381,6 +386,12 @@ fn recording_size_bytes(megabytes: u64) -> u64 {
         .saturating_mul(1024)
         .saturating_mul(1024)
         .clamp(1, MAX_CHUNK_BYTES)
+}
+
+fn test_audio_file_configured() -> bool {
+    std::env::var(TEST_AUDIO_FILE_ENV)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 async fn load_settings(purpose: &'static str) -> Settings {

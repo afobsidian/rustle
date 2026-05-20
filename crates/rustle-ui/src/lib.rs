@@ -1,13 +1,11 @@
 //! User interface crate for Rustle.
 
 use std::path::PathBuf;
-use std::process::Stdio;
 
 use rustle_core::{
     default_config_path, resolve_notes_dir, tasks::spawn_logged, AppEvent, CoreError,
     EventReceiver, EventSender, Settings,
 };
-use tokio::process::Command;
 use tracing::{info, warn};
 
 /// Initialises the user interface component with the shared application event bus.
@@ -116,17 +114,7 @@ async fn configured_notes_dir() -> PathBuf {
 }
 
 async fn open_path(path: &PathBuf, purpose: &'static str) {
-    info!(path = %path.display(), purpose, "opening path");
-    match Command::new("xdg-open")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(_child) => {}
-        Err(error) => warn!(%error, path = %path.display(), purpose, "failed to open path"),
-    }
+    info!(path = %path.display(), purpose, "path");
 }
 
 #[cfg(test)]

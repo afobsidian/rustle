@@ -60,14 +60,16 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
     use llama_cpp_2::sampling::LlamaSampler;
     use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 
-    const SAMPLE_LEN: i32 = 128;
+    const CONTEXT_TOKENS: u32 = 32_768;
+    const MAX_GENERATION_TOKENS: i32 = 1_024;
+    const MIN_BATCH_TOKENS: usize = 512;
 
     if transcript.trim().is_empty() {
         return Err("transcript is empty".to_owned());
     }
 
     let user_prompt = format!(
-        "Create meeting notes from this transcript. Return Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees, Transcript. Keep each section concise and factual.\n\nTranscript:\n{}",
+        "Create meeting notes from this transcript. Return Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees. Keep each section concise and factual. Do not infer topics, decisions, attendees, or action items that are not explicitly present in the transcript. Ignore icebreakers, jokes, setup chatter, and social examples unless they create a real decision or action item. Use 'None captured.' for Key Decisions or Action Items when none are explicit. For action items, include owner and timing only when stated. Do not include any Transcript section or transcript breakdown.\n\nTranscript:\n{}",
         transcript.trim()
     );
 
@@ -79,19 +81,31 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
         .map_err(|error| error.to_string())?;
     let prompt = render_prompt(&model, settings.ai.system_prompt.trim(), &user_prompt)?;
 
-    let n_ctx = NonZeroU32::new(2048).ok_or_else(|| "invalid llama.cpp context size".to_owned())?;
-    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(n_ctx));
+    let prompt_tokens = model
+        .str_to_token(&prompt, llama_cpp_2::model::AddBos::Never)
+        .map_err(|error| error.to_string())?;
+    let prompt_token_count =
+        i32::try_from(prompt_tokens.len()).map_err(|error| error.to_string())?;
+    let context_token_count = i32::try_from(CONTEXT_TOKENS).map_err(|error| error.to_string())?;
+    if prompt_token_count + MAX_GENERATION_TOKENS >= context_token_count {
+        return Err(format!(
+            "transcript prompt uses {prompt_token_count} tokens, exceeding the llama.cpp context budget of {CONTEXT_TOKENS} tokens with {MAX_GENERATION_TOKENS} reserved for notes generation"
+        ));
+    }
+    let target_len = prompt_token_count + MAX_GENERATION_TOKENS;
+
+    let batch_tokens = prompt_tokens.len().max(MIN_BATCH_TOKENS);
+    let n_batch = u32::try_from(batch_tokens).map_err(|error| error.to_string())?;
+    let n_ctx = NonZeroU32::new(CONTEXT_TOKENS)
+        .ok_or_else(|| "invalid llama.cpp context size".to_owned())?;
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(Some(n_ctx))
+        .with_n_batch(n_batch);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|error| error.to_string())?;
 
-    let prompt_tokens = model
-        .str_to_token(&prompt, llama_cpp_2::model::AddBos::Never)
-        .map_err(|error| error.to_string())?;
-    let target_len =
-        i32::try_from(prompt_tokens.len()).map_err(|error| error.to_string())? + SAMPLE_LEN;
-
-    let mut batch = LlamaBatch::new(512, 1);
+    let mut batch = LlamaBatch::new(batch_tokens, 1);
     let last_index =
         i32::try_from(prompt_tokens.len().saturating_sub(1)).map_err(|error| error.to_string())?;
     for (index, token) in (0_i32..).zip(prompt_tokens.into_iter()) {
@@ -307,23 +321,22 @@ fn ensure_title(markdown: &str) -> String {
 
 #[cfg(feature = "provider-llama-cpp")]
 fn is_acceptable_markdown(markdown: &str) -> bool {
-    let section_count = [
+    let required_sections = [
         "## Summary",
         "## Key Decisions",
         "## Action Items",
         "## Attendees",
-        "## Transcript",
-    ]
-    .iter()
-    .filter(|section| markdown.contains(**section))
-    .count();
+    ];
+    let has_all_sections = required_sections
+        .iter()
+        .all(|section| markdown.contains(*section));
 
     let has_content_line = markdown
         .lines()
         .map(str::trim)
         .any(|line| !line.is_empty() && !line.starts_with('#'));
 
-    has_content_line && (section_count >= 2 || markdown.starts_with("# Meeting Notes\n\n"))
+    has_content_line && has_all_sections
 }
 
 #[cfg(feature = "provider-llama-cpp")]
@@ -345,7 +358,7 @@ mod tests {
     #[test]
     fn accepts_bold_section_labels_from_model_output() {
         let markdown = normalise_markdown(
-            "**Summary**\nA short summary.\n\n**Key Decisions**\n- Keep the manual transcript flow.",
+            "**Summary**\nA short summary.\n\n**Key Decisions**\n- Keep the manual transcript flow.\n\n**Action Items**\n- None.\n\n**Attendees**\n- Unknown.",
         )
         .expect("markdown should be accepted");
 
@@ -353,5 +366,18 @@ mod tests {
         assert!(markdown.contains("## Summary"));
         assert!(markdown.contains("## Key Decisions"));
         assert!(markdown.contains("A short summary."));
+    }
+
+    #[test]
+    fn rejects_incomplete_model_output() {
+        let error = normalise_markdown(
+            "## Summary\nThe meeting is about Brexit.\n\n## Key Decisions\n- Discuss trade.",
+        )
+        .expect_err("incomplete markdown should be rejected");
+
+        assert_eq!(
+            error,
+            "llama.cpp generation produced invalid markdown structure"
+        );
     }
 }

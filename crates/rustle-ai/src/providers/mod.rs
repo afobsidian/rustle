@@ -29,7 +29,9 @@ impl AiRuntime {
     ) -> SummarisationOutcome {
         match settings.ai.provider {
             AiProvider::LlamaCpp => match llama_cpp::summarise(settings, transcript).await {
-                Ok(markdown) => SummarisationOutcome::Ready(builtin::notes_from_markdown(markdown)),
+                Ok(markdown) => {
+                    SummarisationOutcome::Ready(builtin::notes_from_markdown(markdown, transcript))
+                }
                 Err(error) => {
                     warn!(%error, "llama.cpp summarisation failed; writing transcript-only notes");
                     SummarisationOutcome::Ready(builtin::summarise_with_reason(
@@ -39,7 +41,9 @@ impl AiRuntime {
                 }
             },
             AiProvider::Ollama => match ollama::summarise(settings, transcript).await {
-                Ok(markdown) => SummarisationOutcome::Ready(builtin::notes_from_markdown(markdown)),
+                Ok(markdown) => {
+                    SummarisationOutcome::Ready(builtin::notes_from_markdown(markdown, transcript))
+                }
                 Err(error) => {
                     warn!(%error, "ollama summarisation failed; writing transcript-only notes");
                     SummarisationOutcome::Ready(builtin::summarise_with_reason(
@@ -68,26 +72,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_notes_include_reason_and_transcript() {
+    fn fallback_notes_include_reason_without_transcript() {
         let notes = builtin::summarise_with_reason(
             "Alex: We agreed to keep the manual transcript flow for the MVP.",
             "llama.cpp summarisation unavailable",
         );
 
         assert!(notes.markdown.contains("## Warning"));
-        assert!(notes.markdown.contains("Full transcript saved instead"));
         assert!(notes
             .markdown
-            .contains("Alex: We agreed to keep the manual transcript flow for the MVP."));
+            .contains("Transcript draft remains available separately"));
+        assert!(!notes.markdown.contains("## Transcript"));
+        assert!(!notes.markdown.contains("Alex: We agreed"));
     }
 
     #[test]
     fn markdown_notes_use_first_non_heading_line_as_summary() {
         let notes = builtin::notes_from_markdown(
             "# Meeting Notes\n\nA short summary line.\n\n## Action Items\n\n- Follow up".to_owned(),
+            "Alex: Follow up on the manual transcript flow.",
         );
 
         assert_eq!(notes.summary, "A short summary line.");
         assert!(notes.markdown.contains("- Follow up"));
+        assert!(!notes.markdown.contains("## Transcript"));
+        assert!(!notes
+            .markdown
+            .contains("Alex: Follow up on the manual transcript flow."));
+    }
+
+    #[test]
+    fn markdown_notes_strip_generated_transcript_breakdown() {
+        let notes = builtin::notes_from_markdown(
+            "# Meeting Notes\n\n## Summary\n\nGrounded summary.\n\n**Transcript Breakdown**\n\nGenerated transcript-like content.".to_owned(),
+            "Actual transcript text.",
+        );
+
+        assert!(!notes.markdown.contains("Transcript Breakdown"));
+        assert!(!notes.markdown.contains("Generated transcript-like content"));
+        assert!(!notes.markdown.contains("## Transcript"));
+        assert!(!notes.markdown.contains("Actual transcript text."));
     }
 }

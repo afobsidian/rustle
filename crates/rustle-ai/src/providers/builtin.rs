@@ -1,13 +1,11 @@
 use rustle_core::MeetingNotes;
 
-pub(crate) fn summarise_with_reason(transcript: &str, reason: impl AsRef<str>) -> MeetingNotes {
-    let transcript = cleaned_transcript(transcript);
+pub(crate) fn summarise_with_reason(_transcript: &str, reason: impl AsRef<str>) -> MeetingNotes {
     let warning = format!(
-        "Model output was unavailable or invalid. Full transcript saved instead: {}",
+        "Model output was unavailable or invalid. Transcript draft remains available separately: {}",
         reason.as_ref()
     );
-    let markdown =
-        format!("# Meeting Notes\n\n## Warning\n\n{warning}\n\n## Transcript\n\n{transcript}\n");
+    let markdown = format!("# Meeting Notes\n\n## Warning\n\n{warning}\n");
 
     MeetingNotes {
         summary: warning,
@@ -18,16 +16,8 @@ pub(crate) fn summarise_with_reason(transcript: &str, reason: impl AsRef<str>) -
     }
 }
 
-fn cleaned_transcript(transcript: &str) -> String {
-    let transcript = transcript.trim();
-    if transcript.is_empty() {
-        "No transcript text was captured.".to_owned()
-    } else {
-        transcript.to_owned()
-    }
-}
-
-pub(crate) fn notes_from_markdown(markdown: String) -> MeetingNotes {
+pub(crate) fn notes_from_markdown(markdown: String, _transcript: &str) -> MeetingNotes {
+    let markdown = strip_generated_transcript(&markdown).trim().to_owned();
     let summary = markdown
         .lines()
         .map(str::trim)
@@ -42,4 +32,32 @@ pub(crate) fn notes_from_markdown(markdown: String) -> MeetingNotes {
         attendees: Vec::new(),
         markdown,
     }
+}
+
+fn strip_generated_transcript(markdown: &str) -> String {
+    let mut output = Vec::new();
+    for line in markdown.lines() {
+        if is_generated_transcript_heading(line) {
+            break;
+        }
+        output.push(line);
+    }
+
+    output.join("\n")
+}
+
+fn is_generated_transcript_heading(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let trimmed = trimmed.trim_start_matches('#').trim();
+    let trimmed = trimmed.strip_prefix("**").unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix("**").unwrap_or(trimmed);
+    let trimmed = trimmed.strip_prefix("__").unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix("__").unwrap_or(trimmed);
+    let trimmed = trimmed.trim_end_matches(':').trim();
+
+    trimmed.to_ascii_lowercase().starts_with("transcript")
 }

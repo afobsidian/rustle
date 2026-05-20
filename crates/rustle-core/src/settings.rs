@@ -321,10 +321,10 @@ impl Default for AiSettings {
     fn default() -> Self {
         Self {
             provider: AiProvider::LlamaCpp,
-            model: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_owned(),
+            model: "Qwen/Qwen2.5-3B-Instruct-GGUF".to_owned(),
             model_path: String::new(),
-            hf_repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_owned(),
-            hf_model_file: "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_owned(),
+            hf_repo: "Qwen/Qwen2.5-3B-Instruct-GGUF".to_owned(),
+            hf_model_file: "qwen2.5-3b-instruct-q4_k_m.gguf".to_owned(),
             api_key: String::new(),
             ollama_url: "http://localhost:11434".to_owned(),
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_owned(),
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(settings.audio.max_recording_size_mb, 2048);
         assert_eq!(settings.audio.chunk_duration_minutes, 10);
         assert_eq!(settings.ai.provider, AiProvider::LlamaCpp);
-        assert_eq!(settings.ai.model, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+        assert_eq!(settings.ai.model, "Qwen/Qwen2.5-3B-Instruct-GGUF");
     }
 
     #[test]

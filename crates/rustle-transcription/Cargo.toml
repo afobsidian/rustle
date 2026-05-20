@@ -6,8 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+hf-hub = "0.4.3"
 hound = "3.5.1"
 rustle-core = { path = "../rustle-core" }
 tokio.workspace = true
 tracing.workspace = true
-whisper-rs = "0.16.0"
+whisper-rs = { version = "0.16.0", features = ["tracing_backend"] }

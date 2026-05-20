@@ -30,7 +30,9 @@ help
 
 The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
 
-Local transcription uses `whisper-rs` and reads the model configured by `transcription.model_path`. Download or place a whisper.cpp `ggml` model in that path, for example:
+To test transcription with a known WAV instead of the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting.
+
+Local transcription uses `whisper-rs` and reads the model configured by `transcription.model_path`. When the default model path is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing:
 
 ```toml
 [transcription]
@@ -38,19 +40,21 @@ method = "local"
 model_path = "~/.local/share/rustle/models/ggml-base.en.bin"
 ```
 
-The default AI provider is the local `llama_cpp` backend using a quantized GGUF model. The first run may download model files, and failures still fall back to locally generated Markdown notes from the transcript.
+For a custom `transcription.model_path`, download or place a compatible whisper.cpp `ggml` model at that path yourself.
+
+The default AI provider is the local `llama_cpp` backend using a quantized GGUF model. The first run may download model files, and failures still fall back to locally generated Markdown warning notes.
 
 To point Rustle at a different local llama.cpp model, set this in `~/.config/rustle/config.toml`:
 
 ```toml
 [ai]
 provider = "llama_cpp"
-model = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-hf_repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-hf_model_file = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+model = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 ```
 
-Ollama remains available as an optional provider by setting `provider = "ollama"`. If the configured AI provider is unavailable, Rustle still saves fallback notes with the raw transcript. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/`. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
+Ollama remains available as an optional provider by setting `provider = "ollama"`. If the configured AI provider is unavailable, Rustle still saves fallback notes with the failure reason. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
 
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 

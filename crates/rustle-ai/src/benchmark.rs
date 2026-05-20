@@ -62,7 +62,7 @@ async fn benchmark_provider(model: &LlamaCppBenchmarkModel) -> ProviderBenchmark
 
     let (status, output_chars, preview) = match outcome {
         Ok(SummarisationOutcome::Ready(notes)) => {
-            let status = if notes.summary == "Summary unavailable" {
+            let status = if notes.markdown.contains("## Warning") {
                 BenchmarkStatus::Fallback
             } else {
                 BenchmarkStatus::Ready
@@ -121,7 +121,23 @@ fn benchmark_models() -> Vec<LlamaCppBenchmarkModel> {
         },
         LlamaCppBenchmarkModel {
             repo: "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-            file: "qwen2.5-1.5b-instruct-q2_k.gguf",
+            file: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        },
+        LlamaCppBenchmarkModel {
+            repo: "bartowski/gemma-2-2b-it-GGUF",
+            file: "gemma-2-2b-it-Q4_K_M.gguf",
+        },
+        LlamaCppBenchmarkModel {
+            repo: "Qwen/Qwen2.5-3B-Instruct-GGUF",
+            file: "qwen2.5-3b-instruct-q4_k_m.gguf",
+        },
+        LlamaCppBenchmarkModel {
+            repo: "bartowski/Llama-3.2-3B-Instruct-GGUF",
+            file: "Llama-3.2-3B-Instruct-IQ4_XS.gguf",
+        },
+        LlamaCppBenchmarkModel {
+            repo: "bartowski/Phi-3.5-mini-instruct-GGUF",
+            file: "Phi-3.5-mini-instruct-IQ4_XS.gguf",
         },
     ]
 }

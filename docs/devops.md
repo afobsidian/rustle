@@ -12,26 +12,28 @@ make run
 
 The current MVP uses terminal commands while the tray implementation is still pending:
 
-| Command                | Purpose                                      |
-| ---------------------- | -------------------------------------------- |
-| `start [meeting name]` | Starts a manual meeting and opens a draft.   |
-| `stop`                 | Reads the draft, generates notes, and saves. |
-| `open`                 | Opens the latest saved note or notes folder. |
-| `quit`                 | Requests graceful application shutdown.      |
+| Command                | Purpose                                          |
+| ---------------------- | ------------------------------------------------ |
+| `start [meeting name]` | Starts a manual meeting and logs a draft path.   |
+| `stop`                 | Reads the draft, generates notes, and saves.     |
+| `open`                 | Logs the latest saved note or notes folder path. |
+| `quit`                 | Requests graceful application shutdown.          |
 
-The default local AI provider is the llama.cpp backend using a quantized GGUF model. The first run may download model files, and failures still fall back to local Markdown notes derived from the transcript.
+Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.
+
+The default local AI provider is the llama.cpp backend using a quantized GGUF model. The first run may download model files, and failures still fall back to local Markdown warning notes.
 
 To point Rustle at a different llama.cpp model, set this in `~/.config/rustle/config.toml`:
 
 ```toml
 [ai]
 provider = "llama_cpp"
-model = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-hf_repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-hf_model_file = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+model = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 ```
 
-Ollama remains available as an optional provider with `provider = "ollama"`. If the configured AI provider fails, Rustle writes fallback notes containing the transcript. A dev container may not expose a graphical session or SNI tray host, so validate desktop tray behavior from the Fedora Hyprland session once the tray backend is implemented.
+Ollama remains available as an optional provider with `provider = "ollama"`. If the configured AI provider fails, Rustle writes fallback notes with the failure reason and keeps the transcript draft separate. A dev container may not expose a graphical session or SNI tray host, so validate desktop tray behavior from the Fedora Hyprland session once the tray backend is implemented.
 
 Benchmark available providers on the current machine with:
 
@@ -48,8 +50,16 @@ Manual smoke test:
 3. Review, edit, or replace the sample text in the draft under `~/.local/share/rustle/transcripts/` and save it.
 4. Enter `stop`.
 5. Confirm a Markdown note appears under `~/.local/share/rustle/notes/`.
-6. Enter `open` to open the latest note or notes folder.
+6. Enter `open` to print the latest note or notes folder path.
 7. Enter `quit` and confirm the process exits.
+
+Known WAV transcription test:
+
+1. Prepare a short WAV file containing speech, ideally 16 kHz mono.
+2. Run `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav make run`.
+3. Enter `start Known WAV Test`.
+4. Enter `stop`; Rustle skips live mic capture and transcribes the configured WAV.
+5. Confirm the transcript draft contains text derived from the WAV and the saved note contains generated meeting notes without embedding the transcript.
 
 ## Local validation
 

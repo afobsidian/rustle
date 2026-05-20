@@ -10,7 +10,7 @@ pub(crate) async fn summarise(settings: &Settings, transcript: &str) -> Result<S
 
     let endpoint = parse_endpoint(&settings.ai.ollama_url)?;
     let prompt = format!(
-        "{}\n\nReturn Markdown with these headings: Summary, Key Decisions, Action Items, Attendees.\n\nTranscript:\n{}",
+        "{}\n\nReturn Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees. Keep each section concise and factual. Do not infer topics, decisions, attendees, or action items that are not explicitly present in the transcript. Ignore icebreakers, jokes, setup chatter, and social examples unless they create a real decision or action item. Use 'None captured.' for Key Decisions or Action Items when none are explicit. Do not include any Transcript section or transcript breakdown.\n\nTranscript:\n{}",
         settings.ai.system_prompt,
         transcript.trim()
     );
