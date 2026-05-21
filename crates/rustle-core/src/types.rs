@@ -1,5 +1,7 @@
 //! Domain types shared across Rustle crates.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// Source that detected a meeting state change.
@@ -39,4 +41,26 @@ pub struct MeetingNotes {
     pub attendees: Vec<String>,
     /// Markdown rendering of the complete note.
     pub markdown: String,
+}
+
+/// A persisted document surfaced in the tray UI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredDocument {
+    /// Document kind.
+    pub kind: StoredDocumentKind,
+    /// Absolute filesystem path to the document.
+    pub path: PathBuf,
+    /// Human-readable meeting or document name.
+    pub title: String,
+    /// Seconds since Unix epoch derived from the document filename when available.
+    pub timestamp_seconds: u64,
+}
+
+/// The persisted document kind.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StoredDocumentKind {
+    /// A saved Markdown meeting note.
+    Note,
+    /// A transcript draft or saved transcript text file.
+    Transcript,
 }

@@ -1,11 +1,14 @@
 //! User interface crate for Rustle.
 
+use std::ffi::OsString;
+use std::path::Path;
 use std::path::PathBuf;
 
 use rustle_core::{
     default_config_path, resolve_notes_dir, tasks::spawn_logged, AppEvent, CoreError,
-    EventReceiver, EventSender, Settings,
+    EventReceiver, EventSender, Settings, StoredDocumentKind,
 };
+use tokio::process::Command;
 use tracing::{info, warn};
 
 /// Initialises the user interface component with the shared application event bus.
@@ -34,24 +37,43 @@ async fn notes_open_loop(mut event_rx: EventReceiver) {
             Ok(AppEvent::TranscriptDraftReady { path, .. }) => {
                 latest_transcript = Some(path);
             }
+            Ok(AppEvent::DocumentDeleted { path, kind }) => match kind {
+                StoredDocumentKind::Note => {
+                    if latest_note.as_ref().is_some_and(|current| current == &path) {
+                        latest_note = None;
+                    }
+                }
+                StoredDocumentKind::Transcript => {
+                    if latest_transcript
+                        .as_ref()
+                        .is_some_and(|current| current == &path)
+                    {
+                        latest_transcript = None;
+                    }
+                }
+            },
             Ok(AppEvent::OpenNotesRequested) => {
                 let path = match latest_note.clone() {
                     Some(path) => path,
                     None => configured_notes_dir().await,
                 };
-                open_path(&path, "notes").await;
+                let prefer_editor = path.is_file();
+                open_path(&path, prefer_editor, "notes").await;
             }
             Ok(AppEvent::OpenTranscriptRequested) => {
                 if let Some(path) = latest_transcript.clone() {
-                    open_path(&path, "transcript draft").await;
+                    open_path(&path, true, "transcript draft").await;
                 } else {
                     warn!("no transcript draft is available to open");
                 }
             }
             Ok(AppEvent::OpenSettingsRequested) => {
                 if let Some(path) = ensure_settings_file().await {
-                    open_path(&path, "settings file").await;
+                    open_path(&path, true, "settings file").await;
                 }
+            }
+            Ok(AppEvent::OpenPathRequested { path, prefer_editor }) => {
+                open_path(&path, prefer_editor, "requested path").await;
             }
             Ok(AppEvent::QuitRequested) => break,
             Ok(_) => {}
@@ -113,13 +135,74 @@ async fn configured_notes_dir() -> PathBuf {
     resolve_notes_dir(&settings).unwrap_or_else(|_| PathBuf::from("."))
 }
 
-async fn open_path(path: &PathBuf, purpose: &'static str) {
-    info!(path = %path.display(), purpose, "path");
+async fn open_path(path: &PathBuf, prefer_editor: bool, purpose: &'static str) {
+    match launch_path(path, prefer_editor).await {
+        Ok(()) => info!(path = %path.display(), prefer_editor, purpose, "opened path"),
+        Err(error) => warn!(%error, path = %path.display(), prefer_editor, purpose, "failed to open path"),
+    }
+}
+
+async fn launch_path(path: &Path, prefer_editor: bool) -> std::io::Result<()> {
+    if prefer_editor {
+        if let Some(command_line) = preferred_editor_command(path)? {
+            return spawn_command(command_line).await;
+        }
+    }
+
+    spawn_command(CommandLine {
+        program: OsString::from("xdg-open"),
+        args: vec![path.as_os_str().to_owned()],
+    })
+    .await
+}
+
+fn preferred_editor_command(path: &Path) -> std::io::Result<Option<CommandLine>> {
+    for variable in ["VISUAL", "EDITOR"] {
+        let Some(value) = std::env::var_os(variable) else {
+            continue;
+        };
+
+        let command = value.to_string_lossy().trim().to_owned();
+        if command.is_empty() {
+            continue;
+        }
+
+        let Some(mut parts) = shlex::split(&command) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("failed to parse {variable}={command}"),
+            ));
+        };
+        if parts.is_empty() {
+            continue;
+        }
+
+        let program = OsString::from(parts.remove(0));
+        let mut args = parts.into_iter().map(OsString::from).collect::<Vec<_>>();
+        args.push(path.as_os_str().to_owned());
+        return Ok(Some(CommandLine { program, args }));
+    }
+
+    Ok(None)
+}
+
+async fn spawn_command(command_line: CommandLine) -> std::io::Result<()> {
+    let mut command = Command::new(&command_line.program);
+    command.args(&command_line.args);
+    command.spawn()?.wait().await.map(|_| ())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommandLine {
+    program: OsString,
+    args: Vec<OsString>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_settings_file_at;
+    use super::{ensure_settings_file_at, preferred_editor_command, CommandLine};
+    use std::ffi::OsString;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
@@ -151,5 +234,34 @@ mod tests {
 
         assert_eq!(resolved, None);
         let _ = tokio::fs::remove_dir_all(&temp_root).await;
+    }
+
+    #[test]
+    fn editor_command_uses_visual_before_editor() {
+        let original_visual = std::env::var_os("VISUAL");
+        let original_editor = std::env::var_os("EDITOR");
+        std::env::set_var("VISUAL", "nvim -f");
+        std::env::set_var("EDITOR", "nano");
+
+        let command = preferred_editor_command(Path::new("/tmp/test.md"))
+            .expect("editor command should parse")
+            .expect("editor command should exist");
+
+        assert_eq!(
+            command,
+            CommandLine {
+                program: OsString::from("nvim"),
+                args: vec![OsString::from("-f"), OsString::from("/tmp/test.md")],
+            }
+        );
+
+        match original_visual {
+            Some(value) => std::env::set_var("VISUAL", value),
+            None => std::env::remove_var("VISUAL"),
+        }
+        match original_editor {
+            Some(value) => std::env::set_var("EDITOR", value),
+            None => std::env::remove_var("EDITOR"),
+        }
     }
 }

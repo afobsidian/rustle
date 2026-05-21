@@ -6,11 +6,13 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use rustle_core::{
-    default_data_dir, expand_tilde, safe_filename, tasks::spawn_logged, AppEvent, CoreError,
-    EventReceiver, EventSender, Settings, TranscriptSegment, TranscriptionMethod,
+    expand_tilde, resolve_transcripts_dir, safe_filename, tasks::spawn_logged, AppEvent,
+    CoreError, DetectionSource, EventReceiver, EventSender, Settings, TranscriptSegment,
+    TranscriptionMethod,
 };
 use tokio::fs;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
@@ -142,6 +144,9 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     },
                 );
             }
+            Ok(AppEvent::SummariseTranscriptRequested { path }) => {
+                summarise_saved_transcript(&event_tx, path).await;
+            }
             Ok(AppEvent::SettingsChanged(updated_settings)) => {
                 settings = updated_settings.validated();
             }
@@ -156,9 +161,8 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
 }
 
 async fn create_transcript_draft(meeting_name: &str) -> std::io::Result<PathBuf> {
-    let directory = default_data_dir()
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?
-        .join("transcripts");
+    let directory = resolve_transcripts_dir()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
     fs::create_dir_all(&directory).await?;
 
     let file_name = format!(
@@ -505,6 +509,58 @@ fn transcript_segments(transcript: String) -> Vec<TranscriptSegment> {
     }]
 }
 
+async fn summarise_saved_transcript(event_tx: &EventSender, path: PathBuf) {
+    let transcript = match fs::read_to_string(&path).await {
+        Ok(transcript) => transcript,
+        Err(error) => {
+            warn!(%error, path = %path.display(), "failed to read transcript for summarisation");
+            return;
+        }
+    };
+
+    let segments = transcript_segments(transcript);
+    if segments.is_empty() {
+        warn!(path = %path.display(), "refusing to summarise an empty transcript");
+        return;
+    }
+
+    let meeting_id = Uuid::new_v4();
+    let meeting_name = meeting_name_from_path(&path);
+    publish(
+        event_tx,
+        AppEvent::MeetingStarted {
+            id: meeting_id,
+            name: meeting_name,
+            source: DetectionSource::Manual,
+        },
+    );
+    publish(
+        event_tx,
+        AppEvent::TranscriptionReady {
+            meeting_id,
+            segments,
+        },
+    );
+}
+
+fn meeting_name_from_path(path: &Path) -> String {
+    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        return "Meeting".to_owned();
+    };
+
+    let title_fragment = stem.split_once('_').map(|(_, value)| value).unwrap_or(stem);
+    let title = title_fragment
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        "Meeting".to_owned()
+    } else {
+        title
+    }
+}
+
 async fn load_settings(purpose: &'static str) -> Settings {
     match Settings::load().await {
         Ok(settings) => settings,
@@ -555,6 +611,13 @@ mod tests {
         assert_eq!(centiseconds_to_millis(42), 420);
         assert_eq!(centiseconds_to_millis(-1), 0);
         assert_eq!(centiseconds_to_millis(i64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn derives_meeting_name_from_transcript_filename() {
+        let name = meeting_name_from_path(Path::new("/tmp/1779283974_team_sync.txt"));
+
+        assert_eq!(name, "team sync");
     }
 
     #[test]

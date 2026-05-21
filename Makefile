@@ -4,6 +4,8 @@ CARGO ?= cargo
 TARGET_DIR ?= target
 DIST_DIR ?= dist
 INSTALL_BIN_DIR ?= $(HOME)/.local/bin
+INSTALL_DATA_HOME ?= $(if $(XDG_DATA_HOME),$(XDG_DATA_HOME),$(HOME)/.local/share)
+INSTALL_DATA_DIR ?= $(INSTALL_DATA_HOME)/rustle
 BENCH_TIMEOUT_SECS ?= 30
 BIN := rustle
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -20,7 +22,7 @@ help:
 	@echo "  make lint          Run clippy with warnings denied"
 	@echo "  make test          Run the full workspace test suite"
 	@echo "  make build         Build the full workspace with warnings denied"
-	@echo "  make install       Build and install the dev binary to INSTALL_BIN_DIR"
+	@echo "  make install       Build and install the dev binary plus tray assets"
 	@echo "  make release-build Build optimized release binaries"
 	@echo "  make dist          Package the release binary and checksum"
 	@echo "  make ci            Run fmt, lint, test, and build"
@@ -47,7 +49,10 @@ build:
 install:
 	$(CARGO) build --bin "$(BIN)"
 	install -Dm755 "$(TARGET_DIR)/debug/$(BIN)" "$(INSTALL_BIN_DIR)/$(BIN)"
+	install -Dm644 "assets/icons/rustle.svg" "$(INSTALL_DATA_DIR)/icons/rustle.svg"
+	install -Dm644 "assets/icons/rustle-recording.svg" "$(INSTALL_DATA_DIR)/icons/rustle-recording.svg"
 	@echo "Installed $(BIN) to $(INSTALL_BIN_DIR)/$(BIN)"
+	@echo "Installed tray assets to $(INSTALL_DATA_DIR)/icons"
 
 release-build:
 	RUSTFLAGS="-D warnings" $(CARGO) build --workspace --release

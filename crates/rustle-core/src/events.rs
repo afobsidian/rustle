@@ -75,6 +75,13 @@ pub enum AppEvent {
     OpenTranscriptRequested,
     /// The settings editor should be opened.
     OpenSettingsRequested,
+    /// A specific file or directory should be opened.
+    OpenPathRequested {
+        /// Filesystem path to open.
+        path: PathBuf,
+        /// Whether the user's preferred editor should be used before `xdg-open`.
+        prefer_editor: bool,
+    },
     /// A manual transcript draft has been created for a meeting.
     TranscriptDraftReady {
         /// Meeting identifier associated with the transcript draft.
@@ -87,6 +94,25 @@ pub enum AppEvent {
         /// Meeting identifier associated with the saved note.
         meeting_id: Uuid,
         /// Filesystem path to the saved Markdown note.
+        path: PathBuf,
+    },
+    /// A persisted document should be deleted.
+    DeleteDocumentRequested {
+        /// Filesystem path to delete.
+        path: PathBuf,
+        /// The document kind, used for validation and tray refresh logic.
+        kind: crate::types::StoredDocumentKind,
+    },
+    /// A persisted document has been deleted.
+    DocumentDeleted {
+        /// Filesystem path that was deleted.
+        path: PathBuf,
+        /// The document kind that was deleted.
+        kind: crate::types::StoredDocumentKind,
+    },
+    /// An existing transcript should be summarised into notes.
+    SummariseTranscriptRequested {
+        /// Filesystem path to the transcript file.
         path: PathBuf,
     },
     /// Settings have changed and should be reloaded by subscribers.

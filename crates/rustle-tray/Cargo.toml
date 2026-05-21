@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 ksni = "0.3.4"
 rustle-core = { path = "../rustle-core" }
+rustle-storage = { path = "../rustle-storage" }
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true

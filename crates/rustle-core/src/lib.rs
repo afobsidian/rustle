@@ -11,10 +11,15 @@ pub use errors::CoreError;
 pub use events::{
     AppEvent, EventBus, EventPublishError, EventReceiver, EventSender, EVENT_BUS_CAPACITY,
 };
-pub use paths::{default_data_dir, expand_tilde, is_safe_child, resolve_notes_dir, safe_filename};
+pub use paths::{
+    default_data_dir, expand_tilde, is_safe_child, resolve_notes_dir, resolve_transcripts_dir,
+    safe_filename,
+};
 pub use settings::{
     default_config_path, AiProvider, AiSettings, AudioSettings, GeneralSettings, LoginMethod,
     MeetingSettings, RecordingDetectionMethod, Settings, StorageSettings, TranscriptionMethod,
     TranscriptionSettings,
 };
-pub use types::{DetectionSource, MeetingNotes, TranscriptSegment};
+pub use types::{
+    DetectionSource, MeetingNotes, StoredDocument, StoredDocumentKind, TranscriptSegment,
+};

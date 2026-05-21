@@ -11,4 +11,5 @@ hound = "3.5.1"
 rustle-core = { path = "../rustle-core" }
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 whisper-rs = { version = "0.16.0", features = ["tracing_backend"] }

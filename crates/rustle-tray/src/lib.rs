@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Category, Handle, MenuItem, Status, ToolTip, Tray, TrayMethods};
 use rustle_core::{
-    default_data_dir, tasks::spawn_logged, AppEvent, CoreError, DetectionSource, EventReceiver,
-    EventSender,
+    default_data_dir, resolve_notes_dir, resolve_transcripts_dir, tasks::spawn_logged,
+    AiProvider, AppEvent, CoreError, DetectionSource, EventReceiver, EventSender,
+    RecordingDetectionMethod, Settings, StoredDocument, StoredDocumentKind, TranscriptionMethod,
 };
+use rustle_storage::{list_notes, list_transcripts};
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -16,8 +18,9 @@ use uuid::Uuid;
 struct RustleTray {
     event_tx: EventSender,
     active_meeting: Option<(Uuid, String)>,
-    latest_note: Option<PathBuf>,
-    latest_transcript: Option<PathBuf>,
+    settings: Settings,
+    notes: Vec<StoredDocument>,
+    transcripts: Vec<StoredDocument>,
 }
 
 /// Initialises the system tray component with the shared application event bus.
@@ -40,17 +43,20 @@ pub async fn initialise(
 }
 
 async fn start_status_notifier(event_tx: EventSender, receiver: EventReceiver) {
+    let settings = load_settings("tray startup").await;
+    let (notes, transcripts) = load_documents(&settings).await;
     let tray = RustleTray {
         event_tx,
         active_meeting: None,
-        latest_note: None,
-        latest_transcript: None,
+        settings: settings.clone(),
+        notes,
+        transcripts,
     };
 
     match tray.assume_sni_available(true).spawn().await {
         Ok(handle) => {
             info!("system tray registered");
-            spawn_logged("tray-status-loop", status_loop(receiver, handle));
+            spawn_logged("tray-status-loop", status_loop(receiver, handle, settings));
         }
         Err(error) => {
             warn!(%error, "desktop tray integration unavailable; terminal controls remain active");
@@ -106,27 +112,28 @@ impl Tray for RustleTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
+        if let Some(document) = self.notes.first() {
+            self.open_path(document.path.clone(), true);
+            return;
+        }
+
+        if let Some(path) = self.notes_dir() {
+            self.open_path(path, false);
+            return;
+        }
+
         publish(&self.event_tx, AppEvent::OpenNotesRequested);
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         vec![
-            standard_item("_Open Notes", true, "document-open", |tray| {
-                publish(&tray.event_tx, AppEvent::OpenNotesRequested);
-            }),
-            standard_item(
-                "Open _Transcript",
-                self.latest_transcript.is_some(),
-                "text-x-generic",
-                |tray| publish(&tray.event_tx, AppEvent::OpenTranscriptRequested),
-            ),
+            notes_submenu(self),
+            transcripts_submenu(self),
             current_meeting_item(self.active_meeting.as_ref()),
             MenuItem::Separator,
             meeting_submenu(self.active_meeting.is_some()),
             MenuItem::Separator,
-            standard_item("_Settings", true, "preferences-system", |tray| {
-                publish(&tray.event_tx, AppEvent::OpenSettingsRequested);
-            }),
+            settings_submenu(self),
             standard_item("_Quit", true, "application-exit", |tray| {
                 tray.stop_active_meeting();
                 publish(&tray.event_tx, AppEvent::QuitRequested);
@@ -176,19 +183,65 @@ impl RustleTray {
         info!(meeting = %meeting_name, "meeting stopped");
         publish(&self.event_tx, AppEvent::MeetingEnded { id: meeting_id });
     }
+
+    fn open_path(&self, path: PathBuf, prefer_editor: bool) {
+        publish(
+            &self.event_tx,
+            AppEvent::OpenPathRequested { path, prefer_editor },
+        );
+    }
+
+    fn delete_document(&self, path: PathBuf, kind: StoredDocumentKind) {
+        publish(
+            &self.event_tx,
+            AppEvent::DeleteDocumentRequested { path, kind },
+        );
+    }
+
+    fn summarise_transcript(&self, path: PathBuf) {
+        publish(
+            &self.event_tx,
+            AppEvent::SummariseTranscriptRequested { path },
+        );
+    }
+
+    fn request_settings_update(
+        &self,
+        update: impl FnOnce(&mut Settings) + Send + 'static,
+    ) {
+        request_settings_update(self.event_tx.clone(), update);
+    }
+
+    fn notes_dir(&self) -> Option<PathBuf> {
+        resolve_notes_dir(&self.settings).ok()
+    }
+
+    fn transcripts_dir(&self) -> Option<PathBuf> {
+        resolve_transcripts_dir().ok()
+    }
 }
 
 fn standard_item(
-    label: &'static str,
+    label: impl Into<String>,
     enabled: bool,
-    icon_name: &'static str,
+    icon_name: impl Into<String>,
     activate: impl Fn(&mut RustleTray) + Send + 'static,
 ) -> MenuItem<RustleTray> {
     StandardItem {
-        label: label.to_owned(),
+        label: label.into(),
         enabled,
-        icon_name: icon_name.to_owned(),
+        icon_name: icon_name.into(),
         activate: Box::new(activate),
+        ..StandardItem::default()
+    }
+    .into()
+}
+
+fn disabled_item(label: impl Into<String>, icon_name: impl Into<String>) -> MenuItem<RustleTray> {
+    StandardItem {
+        label: label.into(),
+        enabled: false,
+        icon_name: icon_name.into(),
         ..StandardItem::default()
     }
     .into()
@@ -233,6 +286,368 @@ fn meeting_submenu(meeting_active: bool) -> MenuItem<RustleTray> {
         ..SubMenu::default()
     }
     .into()
+}
+
+fn notes_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+    let mut submenu = Vec::new();
+    let latest_note = tray.notes.first().map(|document| document.path.clone());
+    submenu.push(standard_item(
+        "Open _Latest Note",
+        latest_note.is_some(),
+        "document-open",
+        move |tray| {
+            if let Some(path) = latest_note.clone() {
+                tray.open_path(path, true);
+            }
+        },
+    ));
+
+    let notes_dir = tray.notes_dir();
+    submenu.push(standard_item(
+        "Open Notes _Folder",
+        notes_dir.is_some(),
+        "folder-open",
+        move |tray| {
+            if let Some(path) = notes_dir.clone() {
+                tray.open_path(path, false);
+            }
+        },
+    ));
+
+    if tray.notes.is_empty() {
+        submenu.push(disabled_item("No saved notes yet", "text-markdown"));
+    } else {
+        submenu.push(MenuItem::Separator);
+        submenu.extend(tray.notes.iter().cloned().map(note_document_submenu));
+    }
+
+    SubMenu {
+        label: format!("_Notes ({})", tray.notes.len()),
+        icon_name: "text-markdown".to_owned(),
+        submenu,
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn transcripts_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+    let mut submenu = Vec::new();
+    let latest_transcript = tray.transcripts.first().map(|document| document.path.clone());
+    submenu.push(standard_item(
+        "Open Latest _Transcript",
+        latest_transcript.is_some(),
+        "text-x-generic",
+        move |tray| {
+            if let Some(path) = latest_transcript.clone() {
+                tray.open_path(path, true);
+            }
+        },
+    ));
+
+    let transcript_dir = tray.transcripts_dir();
+    submenu.push(standard_item(
+        "Open Transcript _Folder",
+        transcript_dir.is_some(),
+        "folder-open",
+        move |tray| {
+            if let Some(path) = transcript_dir.clone() {
+                tray.open_path(path, false);
+            }
+        },
+    ));
+
+    if tray.transcripts.is_empty() {
+        submenu.push(disabled_item("No saved transcripts yet", "text-x-generic"));
+    } else {
+        submenu.push(MenuItem::Separator);
+        submenu.extend(
+            tray.transcripts
+                .iter()
+                .cloned()
+                .map(transcript_document_submenu),
+        );
+    }
+
+    SubMenu {
+        label: format!("_Transcripts ({})", tray.transcripts.len()),
+        icon_name: "text-x-generic".to_owned(),
+        submenu,
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn note_document_submenu(document: StoredDocument) -> MenuItem<RustleTray> {
+    let open_path = document.path.clone();
+    let delete_path = document.path.clone();
+
+    SubMenu {
+        label: document_menu_label(&document),
+        icon_name: "text-markdown".to_owned(),
+        submenu: vec![
+            standard_item("_Open", true, "document-open", move |tray| {
+                tray.open_path(open_path.clone(), true);
+            }),
+            standard_item("_Delete Permanently", true, "user-trash", move |tray| {
+                tray.delete_document(delete_path.clone(), StoredDocumentKind::Note);
+            }),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn transcript_document_submenu(document: StoredDocument) -> MenuItem<RustleTray> {
+    let open_path = document.path.clone();
+    let summarise_path = document.path.clone();
+    let delete_path = document.path.clone();
+
+    SubMenu {
+        label: document_menu_label(&document),
+        icon_name: "text-x-generic".to_owned(),
+        submenu: vec![
+            standard_item("_Open", true, "document-open", move |tray| {
+                tray.open_path(open_path.clone(), true);
+            }),
+            standard_item("_Summarise To New Note", true, "document-save", move |tray| {
+                tray.summarise_transcript(summarise_path.clone());
+            }),
+            standard_item("_Delete Permanently", true, "user-trash", move |tray| {
+                tray.delete_document(delete_path.clone(), StoredDocumentKind::Transcript);
+            }),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn settings_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+    SubMenu {
+        label: "_Settings".to_owned(),
+        icon_name: "preferences-system".to_owned(),
+        submenu: vec![
+            bool_setting_submenu(
+                "Auto Detect",
+                tray.settings.meeting.auto_detect,
+                "system-search",
+                set_auto_detect,
+            ),
+            bool_setting_submenu(
+                "Auto Capture",
+                tray.settings.meeting.auto_capture,
+                "media-record",
+                set_auto_capture,
+            ),
+            bool_setting_submenu(
+                "Capture Loopback",
+                tray.settings.audio.capture_loopback,
+                "audio-card",
+                set_capture_loopback,
+            ),
+            detection_method_submenu(&tray.settings),
+            transcription_method_submenu(&tray.settings),
+            ai_provider_submenu(&tray.settings),
+            MenuItem::Separator,
+            standard_item("Open Config In _Editor", true, "preferences-desktop-text-to-speech", |tray| {
+                publish(&tray.event_tx, AppEvent::OpenSettingsRequested);
+            }),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn bool_setting_submenu(
+    label: &'static str,
+    current: bool,
+    icon_name: &'static str,
+    setter: fn(&mut Settings, bool),
+) -> MenuItem<RustleTray> {
+    SubMenu {
+        label: format!("{label}: {}", on_off(current)),
+        icon_name: icon_name.to_owned(),
+        submenu: vec![
+            standard_item("Turn _On", !current, "object-select", move |tray| {
+                tray.request_settings_update(move |settings| setter(settings, true));
+            }),
+            standard_item("Turn O_ff", current, "window-close", move |tray| {
+                tray.request_settings_update(move |settings| setter(settings, false));
+            }),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn detection_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
+    let current = settings.meeting.detection_method.clone();
+    SubMenu {
+        label: format!("Detection Method: {}", detection_method_label(&current)),
+        icon_name: "audio-input-microphone".to_owned(),
+        submenu: vec![
+            choice_setting_item(
+                "Hyprland",
+                matches!(current, RecordingDetectionMethod::Hyprland),
+                "preferences-system-windows",
+                RecordingDetectionMethod::Hyprland,
+                set_detection_method,
+            ),
+            choice_setting_item(
+                "PipeWire",
+                matches!(current, RecordingDetectionMethod::PipeWire),
+                "audio-card",
+                RecordingDetectionMethod::PipeWire,
+                set_detection_method,
+            ),
+            choice_setting_item(
+                "Process Polling",
+                matches!(current, RecordingDetectionMethod::Process),
+                "system-run",
+                RecordingDetectionMethod::Process,
+                set_detection_method,
+            ),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn transcription_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
+    let current = settings.transcription.method.clone();
+    SubMenu {
+        label: format!("Transcription: {}", transcription_method_label(&current)),
+        icon_name: "audio-x-generic".to_owned(),
+        submenu: vec![
+            choice_setting_item(
+                "Local Whisper",
+                matches!(current, TranscriptionMethod::Local),
+                "computer",
+                TranscriptionMethod::Local,
+                set_transcription_method,
+            ),
+            choice_setting_item(
+                "OpenAI Whisper",
+                matches!(current, TranscriptionMethod::Openai),
+                "network-server",
+                TranscriptionMethod::Openai,
+                set_transcription_method,
+            ),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn ai_provider_submenu(settings: &Settings) -> MenuItem<RustleTray> {
+    let current = settings.ai.provider.clone();
+    SubMenu {
+        label: format!("AI Provider: {}", ai_provider_label(&current)),
+        icon_name: "applications-science".to_owned(),
+        submenu: vec![
+            choice_setting_item(
+                "llama.cpp",
+                matches!(current, AiProvider::LlamaCpp),
+                "computer",
+                AiProvider::LlamaCpp,
+                set_ai_provider,
+            ),
+            choice_setting_item(
+                "OpenAI",
+                matches!(current, AiProvider::Openai),
+                "network-server",
+                AiProvider::Openai,
+                set_ai_provider,
+            ),
+            choice_setting_item(
+                "Anthropic",
+                matches!(current, AiProvider::Anthropic),
+                "network-server",
+                AiProvider::Anthropic,
+                set_ai_provider,
+            ),
+            choice_setting_item(
+                "Ollama",
+                matches!(current, AiProvider::Ollama),
+                "network-workgroup",
+                AiProvider::Ollama,
+                set_ai_provider,
+            ),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn choice_setting_item<T>(
+    label: &'static str,
+    selected: bool,
+    icon_name: &'static str,
+    value: T,
+    setter: fn(&mut Settings, T),
+) -> MenuItem<RustleTray>
+where
+    T: Clone + Send + 'static,
+{
+    standard_item(label, !selected, icon_name, move |tray| {
+        let next_value = value.clone();
+        tray.request_settings_update(move |settings| setter(settings, next_value));
+    })
+}
+
+fn document_menu_label(document: &StoredDocument) -> String {
+    document.title.clone()
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "On" } else { "Off" }
+}
+
+fn detection_method_label(method: &RecordingDetectionMethod) -> &'static str {
+    match method {
+        RecordingDetectionMethod::Hyprland => "Hyprland",
+        RecordingDetectionMethod::PipeWire => "PipeWire",
+        RecordingDetectionMethod::Process => "Process",
+    }
+}
+
+fn transcription_method_label(method: &TranscriptionMethod) -> &'static str {
+    match method {
+        TranscriptionMethod::Local => "Local Whisper",
+        TranscriptionMethod::Openai => "OpenAI Whisper",
+    }
+}
+
+fn ai_provider_label(provider: &AiProvider) -> &'static str {
+    match provider {
+        AiProvider::LlamaCpp => "llama.cpp",
+        AiProvider::Openai => "OpenAI",
+        AiProvider::Anthropic => "Anthropic",
+        AiProvider::Ollama => "Ollama",
+    }
+}
+
+fn set_auto_detect(settings: &mut Settings, value: bool) {
+    settings.meeting.auto_detect = value;
+}
+
+fn set_auto_capture(settings: &mut Settings, value: bool) {
+    settings.meeting.auto_capture = value;
+}
+
+fn set_capture_loopback(settings: &mut Settings, value: bool) {
+    settings.audio.capture_loopback = value;
+}
+
+fn set_detection_method(settings: &mut Settings, value: RecordingDetectionMethod) {
+    settings.meeting.detection_method = value;
+}
+
+fn set_transcription_method(settings: &mut Settings, value: TranscriptionMethod) {
+    settings.transcription.method = value;
+}
+
+fn set_ai_provider(settings: &mut Settings, value: AiProvider) {
+    settings.ai.provider = value;
 }
 
 async fn terminal_control_loop(event_tx: EventSender) {
@@ -312,7 +727,11 @@ async fn terminal_control_loop(event_tx: EventSender) {
     }
 }
 
-async fn status_loop(mut event_rx: EventReceiver, handle: Handle<RustleTray>) {
+async fn status_loop(
+    mut event_rx: EventReceiver,
+    handle: Handle<RustleTray>,
+    mut settings: Settings,
+) {
     loop {
         match event_rx.recv().await {
             Ok(AppEvent::MeetingStarted { id, name, source }) => {
@@ -333,11 +752,19 @@ async fn status_loop(mut event_rx: EventReceiver, handle: Handle<RustleTray>) {
             }
             Ok(AppEvent::TranscriptDraftReady { path, .. }) => {
                 info!(path = %path.display(), "transcript draft ready");
-                update_tray(&handle, |tray| tray.latest_transcript = Some(path)).await;
+                refresh_documents(&handle, &settings).await;
             }
             Ok(AppEvent::NoteSaved { path, .. }) => {
                 info!(path = %path.display(), "note saved");
-                update_tray(&handle, |tray| tray.latest_note = Some(path)).await;
+                refresh_documents(&handle, &settings).await;
+            }
+            Ok(AppEvent::DocumentDeleted { path, kind }) => {
+                info!(path = %path.display(), ?kind, "document deleted");
+                refresh_documents(&handle, &settings).await;
+            }
+            Ok(AppEvent::SettingsChanged(updated_settings)) => {
+                settings = updated_settings.validated();
+                refresh_documents(&handle, &settings).await;
             }
             Ok(AppEvent::QuitRequested) => {
                 handle.shutdown().await;
@@ -356,6 +783,17 @@ async fn update_tray(handle: &Handle<RustleTray>, update: impl FnOnce(&mut Rustl
     if handle.update(update).await.is_none() {
         warn!("system tray update skipped because tray service is closed");
     }
+}
+
+async fn refresh_documents(handle: &Handle<RustleTray>, settings: &Settings) {
+    let (notes, transcripts) = load_documents(settings).await;
+    let settings = settings.clone();
+    update_tray(handle, move |tray| {
+        tray.settings = settings;
+        tray.notes = notes;
+        tray.transcripts = transcripts;
+    })
+    .await;
 }
 
 async fn terminal_status_loop(mut event_rx: EventReceiver) {
@@ -384,6 +822,52 @@ fn publish(event_tx: &EventSender, event: AppEvent) {
     if let Err(error) = event_tx.send(event) {
         warn!(%error, "failed to publish event");
     }
+}
+
+fn request_settings_update(
+    event_tx: EventSender,
+    update: impl FnOnce(&mut Settings) + Send + 'static,
+) {
+    spawn_logged("tray-save-settings", async move {
+        let mut settings = load_settings("tray settings update").await;
+        update(&mut settings);
+        let settings = settings.validated();
+
+        match settings.save().await {
+            Ok(()) => publish(&event_tx, AppEvent::SettingsChanged(settings)),
+            Err(error) => warn!(%error, "failed to persist tray settings change"),
+        }
+    });
+}
+
+async fn load_settings(purpose: &'static str) -> Settings {
+    match Settings::load().await {
+        Ok(settings) => settings.validated(),
+        Err(error) => {
+            warn!(%error, purpose, "failed to load settings; using defaults");
+            Settings::default().validated()
+        }
+    }
+}
+
+async fn load_documents(settings: &Settings) -> (Vec<StoredDocument>, Vec<StoredDocument>) {
+    let notes = match list_notes(settings).await {
+        Ok(documents) => documents,
+        Err(error) => {
+            warn!(%error, "failed to load note inventory for tray");
+            Vec::new()
+        }
+    };
+
+    let transcripts = match list_transcripts().await {
+        Ok(documents) => documents,
+        Err(error) => {
+            warn!(%error, "failed to load transcript inventory for tray");
+            Vec::new()
+        }
+    };
+
+    (notes, transcripts)
 }
 
 fn unix_timestamp_seconds() -> u64 {
@@ -426,7 +910,9 @@ fn resolve_icon_theme_path_from_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_icon_theme_path_from_candidates;
+    use super::{document_menu_label, resolve_icon_theme_path_from_candidates};
+    use rustle_core::{StoredDocument, StoredDocumentKind};
+    use std::path::PathBuf;
 
     #[test]
     fn uses_first_existing_icon_path_candidate() {
@@ -439,5 +925,17 @@ mod tests {
 
         assert_eq!(resolved, Some(icon_dir));
         let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn document_menu_label_uses_human_title() {
+        let label = document_menu_label(&StoredDocument {
+            kind: StoredDocumentKind::Note,
+            path: PathBuf::from("/tmp/1779283974_team_sync.md"),
+            title: "team sync".to_owned(),
+            timestamp_seconds: 1_779_283_974,
+        });
+
+        assert_eq!(label, "team sync");
     }
 }

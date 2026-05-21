@@ -1,11 +1,12 @@
 //! Storage crate for Rustle.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rustle_core::{
-    resolve_notes_dir, safe_filename, tasks::spawn_logged, AppEvent, CoreError, EventReceiver,
-    EventSender, MeetingNotes, Settings,
+    is_safe_child, resolve_notes_dir, resolve_transcripts_dir, safe_filename,
+    tasks::spawn_logged, AppEvent, CoreError, EventReceiver, EventSender, MeetingNotes,
+    Settings, StoredDocument, StoredDocumentKind,
 };
 use tokio::fs;
 use tracing::{info, warn};
@@ -24,6 +25,7 @@ pub async fn initialise(
 
 async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
     let mut meeting_names = HashMap::new();
+    let mut settings = load_settings("storage startup").await;
 
     loop {
         match event_rx.recv().await {
@@ -34,13 +36,25 @@ async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
                 let meeting_name = meeting_names
                     .remove(&meeting_id)
                     .unwrap_or_else(|| "Meeting".to_owned());
-                match save_notes(&meeting_name, &notes).await {
+                match save_notes(&settings, &meeting_name, &notes).await {
                     Ok(path) => {
                         info!(path = %path.display(), "meeting notes written");
                         publish(&event_tx, AppEvent::NoteSaved { meeting_id, path });
                     }
                     Err(error) => warn!(%error, meeting_id = %meeting_id, "failed to save notes"),
                 }
+            }
+            Ok(AppEvent::DeleteDocumentRequested { path, kind }) => {
+                match delete_document(&settings, kind, &path).await {
+                    Ok(()) => {
+                        info!(path = %path.display(), ?kind, "document deleted");
+                        publish(&event_tx, AppEvent::DocumentDeleted { path, kind });
+                    }
+                    Err(error) => warn!(%error, path = %path.display(), ?kind, "failed to delete document"),
+                }
+            }
+            Ok(AppEvent::SettingsChanged(updated_settings)) => {
+                settings = updated_settings.validated();
             }
             Ok(AppEvent::QuitRequested) => break,
             Ok(_) => {}
@@ -52,16 +66,24 @@ async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
     }
 }
 
-async fn save_notes(meeting_name: &str, notes: &MeetingNotes) -> std::io::Result<PathBuf> {
-    let settings = match Settings::load().await {
-        Ok(settings) => settings,
-        Err(error) => {
-            warn!(%error, "failed to load settings for note storage; using defaults");
-            Settings::default().validated()
-        }
-    };
-    let directory = resolve_notes_dir(&settings)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
+/// Lists saved notes in newest-first order.
+pub async fn list_notes(settings: &Settings) -> std::io::Result<Vec<StoredDocument>> {
+    let directory = resolve_notes_dir(settings).map_err(io_error_from_core)?;
+    list_documents(directory, StoredDocumentKind::Note, "md").await
+}
+
+/// Lists saved transcripts in newest-first order.
+pub async fn list_transcripts() -> std::io::Result<Vec<StoredDocument>> {
+    let directory = resolve_transcripts_dir().map_err(io_error_from_core)?;
+    list_documents(directory, StoredDocumentKind::Transcript, "txt").await
+}
+
+async fn save_notes(
+    settings: &Settings,
+    meeting_name: &str,
+    notes: &MeetingNotes,
+) -> std::io::Result<PathBuf> {
+    let directory = resolve_notes_dir(settings).map_err(io_error_from_core)?;
     fs::create_dir_all(&directory).await?;
 
     let file_name = format!(
@@ -80,6 +102,122 @@ fn render_markdown(notes: &MeetingNotes) -> String {
     }
 
     notes.markdown.clone()
+}
+
+async fn list_documents(
+    directory: PathBuf,
+    kind: StoredDocumentKind,
+    extension: &str,
+) -> std::io::Result<Vec<StoredDocument>> {
+    let mut entries = match fs::read_dir(&directory).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+
+    let mut documents = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let metadata = entry.metadata().await?;
+        if !metadata.is_file() {
+            continue;
+        }
+
+        if path.extension().and_then(|value| value.to_str()) != Some(extension) {
+            continue;
+        }
+
+        if let Some(document) = parse_document(path, kind) {
+            documents.push(document);
+        }
+    }
+
+    documents.sort_by(|left, right| {
+        right
+            .timestamp_seconds
+            .cmp(&left.timestamp_seconds)
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    Ok(documents)
+}
+
+async fn delete_document(
+    settings: &Settings,
+    kind: StoredDocumentKind,
+    path: &Path,
+) -> std::io::Result<()> {
+    let base_dir = document_base_dir(settings, kind).map_err(io_error_from_core)?;
+    ensure_safe_document_path(&base_dir, path).await?;
+    fs::remove_file(path).await
+}
+
+fn document_base_dir(settings: &Settings, kind: StoredDocumentKind) -> Result<PathBuf, CoreError> {
+    match kind {
+        StoredDocumentKind::Note => resolve_notes_dir(settings),
+        StoredDocumentKind::Transcript => resolve_transcripts_dir(),
+    }
+}
+
+async fn ensure_safe_document_path(base_dir: &Path, candidate: &Path) -> std::io::Result<()> {
+    let canonical_base = fs::canonicalize(base_dir).await?;
+    let canonical_candidate = fs::canonicalize(candidate).await?;
+    if is_safe_child(&canonical_base, &canonical_candidate) {
+        return Ok(());
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!(
+            "refusing to access {} outside {}",
+            canonical_candidate.display(),
+            canonical_base.display()
+        ),
+    ))
+}
+
+fn parse_document(path: PathBuf, kind: StoredDocumentKind) -> Option<StoredDocument> {
+    let stem = path.file_stem()?.to_str()?;
+    let (timestamp, title_fragment) = match stem.split_once('_') {
+        Some((timestamp, title_fragment)) => (
+            timestamp.parse::<u64>().unwrap_or(0),
+            humanise_title(title_fragment),
+        ),
+        None => (0, humanise_title(stem)),
+    };
+
+    Some(StoredDocument {
+        kind,
+        path,
+        title: title_fragment,
+        timestamp_seconds: timestamp,
+    })
+}
+
+fn humanise_title(value: &str) -> String {
+    let collapsed = value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.is_empty() {
+        "Meeting".to_owned()
+    } else {
+        collapsed
+    }
+}
+
+fn io_error_from_core(error: CoreError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::NotFound, error)
+}
+
+async fn load_settings(purpose: &'static str) -> Settings {
+    match Settings::load().await {
+        Ok(settings) => settings.validated(),
+        Err(error) => {
+            warn!(%error, purpose, "failed to load settings; using defaults");
+            Settings::default().validated()
+        }
+    }
 }
 
 fn publish(event_tx: &EventSender, event: AppEvent) {
@@ -110,5 +248,18 @@ mod tests {
         };
 
         assert_eq!(render_markdown(&notes), "# Existing");
+    }
+
+    #[test]
+    fn parses_document_title_and_timestamp_from_filename() {
+        let document = parse_document(
+            PathBuf::from("/tmp/1779283974_team_sync.md"),
+            StoredDocumentKind::Note,
+        )
+        .expect("document should parse");
+
+        assert_eq!(document.timestamp_seconds, 1_779_283_974);
+        assert_eq!(document.title, "team sync");
+        assert_eq!(document.kind, StoredDocumentKind::Note);
     }
 }

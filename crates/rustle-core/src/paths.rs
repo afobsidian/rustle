@@ -42,6 +42,11 @@ pub fn resolve_notes_dir(settings: &Settings) -> Result<PathBuf, CoreError> {
     expand_tilde(&settings.storage.notes_dir)
 }
 
+/// Resolves the default transcript directory under the Rustle data root.
+pub fn resolve_transcripts_dir() -> Result<PathBuf, CoreError> {
+    Ok(default_data_dir()?.join("transcripts"))
+}
+
 /// Converts a user-visible name into a conservative filename component.
 #[must_use]
 pub fn safe_filename(name: &str) -> String {
