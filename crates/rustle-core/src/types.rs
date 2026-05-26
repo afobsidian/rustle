@@ -9,10 +9,6 @@ use serde::{Deserialize, Serialize};
 pub enum DetectionSource {
     /// A Hyprland window or IPC event indicated a meeting.
     Hyprland,
-    /// PipeWire or PulseAudio stream state indicated a meeting.
-    PipeWire,
-    /// Process polling indicated a meeting.
-    Process,
     /// The user manually created or controlled the meeting state.
     Manual,
 }

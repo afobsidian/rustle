@@ -73,11 +73,8 @@ pub struct MeetingSettings {
 pub enum RecordingDetectionMethod {
     /// Hyprland IPC and client inspection.
     #[default]
+    #[serde(alias = "pipewire", alias = "process")]
     Hyprland,
-    /// PipeWire stream inspection.
-    PipeWire,
-    /// Process polling.
-    Process,
 }
 
 /// Audio capture settings.

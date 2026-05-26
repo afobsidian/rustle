@@ -1,6 +1,6 @@
 # Granola Clone – Specification Document
 
-> Platform: Linux (Fedora / Hyprland · Wayland)  
+> Platform: Linux (Fedora / Hyprland)  
 > Language: Rust  
 > Purpose: AI-powered meeting notes app with system tray presence and Teams auto-launch
 
@@ -28,7 +28,7 @@ A Rust-native desktop application that sits in the system tray, automatically de
 
 **Key crates (expected):**
 
-- `tray-icon` – system tray (Wayland/X11)
+- `tray-icon` – Hyprland system tray integration
 - `ksni` or `zbus` – StatusNotifierItem DBus protocol (Wayland tray)
 - `serde` / `serde_json` / `toml` – config serialisation
 - `tokio` – async runtime
@@ -52,13 +52,13 @@ A Rust-native desktop application that sits in the system tray, automatically de
 
 #### Description
 
-The application must start without showing any window. The only initial UI is a tray icon in the system notification area (StatusNotifierItem on Wayland/Hyprland).
+The application must start without showing any window. The only initial UI is a tray icon in the system notification area (StatusNotifierItem on Hyprland).
 
 #### Acceptance Criteria
 
 - [ ] App launches and registers a StatusNotifierItem via DBus within 2 seconds
 - [ ] No window is created at startup
-- [ ] A tray icon (SVG or PNG, ≥22×22px) is visible in Waybar / other SNI-compatible bars
+- [ ] A tray icon (SVG or PNG, ≥22×22px) is visible in Waybar or another Hyprland SNI host
 - [ ] App does not crash if no SNI host is running (graceful fallback log)
 - [ ] Process is identifiable as `granola` in `ps aux`
 
@@ -141,28 +141,24 @@ Right-clicking the tray icon opens a context menu with core actions.
 
 #### Description
 
-The app must detect when the user joins a Microsoft Teams meeting and optionally auto-start recording/note-taking.
+The app must detect when the user joins a Microsoft Teams meeting from a Hyprland session and optionally auto-start recording/note-taking.
 
 #### Acceptance Criteria
 
-- [ ] Detects Teams for Linux process (`teams`, `teams-insiders`, or `msedge` running `teams.microsoft.com`) via `/proc` polling or DBus
-- [ ] Detects active audio capture by Teams (indicating an active call) via PipeWire/PulseAudio stream enumeration
+- [ ] Detects a Teams window (`teams`, `teams-insiders`, or `teams.microsoft.com`) through Hyprland client inspection and window events
 - [ ] Emits an internal `MeetingStarted { name: String, source: DetectionSource }` event within 5 seconds of meeting join
 - [ ] Emits `MeetingEnded` event within 10 seconds of meeting leave
 - [ ] Detection works for Teams Web (browser) and Teams native app
 - [ ] Meeting name extracted where possible (window title parsing via Hyprland IPC socket)
 
-#### Detection Strategy (priority order)
+#### Detection Strategy
 
-1. **Hyprland IPC** – query `hyprctl clients` JSON for window with title matching `| Microsoft Teams` or `teams.microsoft.com`
-2. **PipeWire stream** – enumerate streams; detect Teams-owned audio input stream becoming active
-3. **Process polling** – fallback `/proc` scan every 5s
+1. **Hyprland IPC** – query `hyprctl clients` JSON for a window with a title matching `| Microsoft Teams` or `teams.microsoft.com`, then subscribe to Hyprland socket2 events for lifecycle updates
 
 #### Technical Notes
 
-- Hyprland IPC socket: `$HYPRLAND_INSTANCE_SIGNATURE` → `/tmp/hypr/$SIG/.socket2.sock`
+- Hyprland IPC socket: `$HYPRLAND_INSTANCE_SIGNATURE` → `$XDG_RUNTIME_DIR/hypr/$SIG/.socket2.sock`
 - Use `tokio::net::UnixStream` to subscribe to Hyprland socket2 events
-- PipeWire enumeration via `pipewire` crate or `pw-dump` subprocess
 
 ---
 
@@ -291,7 +287,7 @@ start_on_login_method = "xdg"  # "xdg" | "systemd"
 [meeting]
 auto_detect = true
 auto_capture = true
-detection_method = "hyprland"  # "hyprland" | "pipewire" | "process"
+detection_method = "hyprland"
 
 [audio]
 input_device = "default"

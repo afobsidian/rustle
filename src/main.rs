@@ -1,7 +1,7 @@
 //! Rustle application entry point.
 
-use rustle_core::{AppEvent, EventBus, Settings};
-use tracing::info;
+use rustle_core::{is_hyprland_session, supported_session_label, AppEvent, EventBus, Settings};
+use tracing::{info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
@@ -9,6 +9,8 @@ async fn main() -> anyhow::Result<()> {
     install_tracing();
 
     Settings::load().await?;
+    warn_if_unsupported_session();
+
     let event_bus = EventBus::new();
     let sender = event_bus.sender();
 
@@ -23,6 +25,15 @@ async fn main() -> anyhow::Result<()> {
     info!("rustle initialised");
     wait_for_shutdown(event_bus.subscribe()).await;
     Ok(())
+}
+
+fn warn_if_unsupported_session() {
+    if !is_hyprland_session() {
+        warn!(
+            expected_session = supported_session_label(),
+            "Rustle is only supported on Hyprland; continuing in an unsupported session"
+        );
+    }
 }
 
 async fn wait_for_shutdown(mut receiver: rustle_core::EventReceiver) {

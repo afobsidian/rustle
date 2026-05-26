@@ -149,3 +149,29 @@ db_path = ''
     std::fs::remove_file(&path).expect("settings file should be removed");
     std::fs::remove_dir_all(parent).expect("settings temp dir should be removed");
 }
+
+#[tokio::test]
+async fn spec_009_legacy_detection_methods_coerce_to_hyprland() {
+    for legacy_value in ["pipewire", "process"] {
+        let path = temp_config_path(legacy_value);
+        let parent = path.parent().expect("settings path should have parent");
+        std::fs::create_dir_all(parent).expect("settings temp dir should be created");
+        std::fs::write(
+            &path,
+            format!("[meeting]\ndetection_method = '{legacy_value}'\n"),
+        )
+        .expect("legacy detection settings should be written");
+
+        let settings = Settings::load_from_path(&path)
+            .await
+            .expect("legacy detection settings should load");
+
+        assert_eq!(
+            settings.meeting.detection_method,
+            RecordingDetectionMethod::Hyprland
+        );
+
+        std::fs::remove_file(&path).expect("settings file should be removed");
+        std::fs::remove_dir_all(parent).expect("settings temp dir should be removed");
+    }
+}

@@ -1,6 +1,6 @@
 # Rustle
 
-Rust-native desktop meeting notes app for Fedora Linux on Hyprland/Wayland.
+Rust-native desktop meeting notes app for Fedora Linux on Hyprland.
 
 ## Specification
 
@@ -8,7 +8,7 @@ See [docs/specification.md](docs/specification.md) for the product and technical
 
 ## Run Rustle
 
-Rustle starts as a StatusNotifierItem system tray app on Wayland/Hyprland systems with SNI host support such as Waybar. It keeps terminal controls as a fallback when a tray host or D-Bus is unavailable, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes.
+Rustle starts as a StatusNotifierItem system tray app on Hyprland with an SNI host such as Waybar. It keeps terminal controls as a fallback when a tray host or D-Bus is unavailable, warns when launched outside Hyprland, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes.
 
 ```sh
 make run
@@ -58,8 +58,8 @@ Ollama remains available as an optional provider by setting `provider = "ollama"
 
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
-Teams detection and a native notes window are still future work; the current app wires tray controls, application lifecycle, audio-backed transcription, and note-generation pipeline so it can be exercised end to end.
+Hyprland-based Teams detection and a native notes window are still future work; the current app wires tray controls, application lifecycle, audio-backed transcription, and note-generation pipeline so it can be exercised end to end.
 
 ## DevOps
 
-Use `make ci` to run the local validation gate. See [docs/DEVOPS.md](docs/DEVOPS.md) for test, build, release, and pipeline procedures.
+Use `make ci` to run the local validation gate. See [docs/devops.md](docs/devops.md) for test, build, release, and pipeline procedures.

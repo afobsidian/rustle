@@ -10,7 +10,7 @@ Run the manual notes MVP from the repository root:
 make run
 ```
 
-The current MVP uses terminal commands while the tray implementation is still pending:
+Rustle targets Hyprland and starts as a tray app when an SNI host is available. Terminal commands remain as a fallback control path when the tray host or D-Bus is unavailable:
 
 | Command                | Purpose                                          |
 | ---------------------- | ------------------------------------------------ |
@@ -33,7 +33,7 @@ hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
 hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 ```
 
-Ollama remains available as an optional provider with `provider = "ollama"`. If the configured AI provider fails, Rustle writes fallback notes with the failure reason and keeps the transcript draft separate. A dev container may not expose a graphical session or SNI tray host, so validate desktop tray behavior from the Fedora Hyprland session once the tray backend is implemented.
+Ollama remains available as an optional provider with `provider = "ollama"`. If the configured AI provider fails, Rustle writes fallback notes with the failure reason and keeps the transcript draft separate. A dev container may not expose a Hyprland session or SNI tray host, so validate desktop tray behavior from a Fedora Hyprland session.
 
 Benchmark available providers on the current machine with:
 

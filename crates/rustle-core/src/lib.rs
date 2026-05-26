@@ -1,6 +1,7 @@
 //! Shared Rustle types, settings, errors, and event bus primitives.
 
 pub mod errors;
+pub mod environment;
 pub mod events;
 pub mod paths;
 pub mod settings;
@@ -8,6 +9,7 @@ pub mod tasks;
 pub mod types;
 
 pub use errors::CoreError;
+pub use environment::{is_hyprland_session, supported_session_label};
 pub use events::{
     AppEvent, EventBus, EventPublishError, EventReceiver, EventSender, EVENT_BUS_CAPACITY,
 };

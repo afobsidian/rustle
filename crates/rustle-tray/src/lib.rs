@@ -481,35 +481,10 @@ fn bool_setting_submenu(
 
 fn detection_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
     let current = settings.meeting.detection_method.clone();
-    SubMenu {
-        label: format!("Detection Method: {}", detection_method_label(&current)),
-        icon_name: "audio-input-microphone".to_owned(),
-        submenu: vec![
-            choice_setting_item(
-                "Hyprland",
-                matches!(current, RecordingDetectionMethod::Hyprland),
-                "preferences-system-windows",
-                RecordingDetectionMethod::Hyprland,
-                set_detection_method,
-            ),
-            choice_setting_item(
-                "PipeWire",
-                matches!(current, RecordingDetectionMethod::PipeWire),
-                "audio-card",
-                RecordingDetectionMethod::PipeWire,
-                set_detection_method,
-            ),
-            choice_setting_item(
-                "Process Polling",
-                matches!(current, RecordingDetectionMethod::Process),
-                "system-run",
-                RecordingDetectionMethod::Process,
-                set_detection_method,
-            ),
-        ],
-        ..SubMenu::default()
-    }
-    .into()
+    disabled_item(
+        format!("Detection Method: {}", detection_method_label(&current)),
+        "preferences-system-windows",
+    )
 }
 
 fn transcription_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
@@ -605,8 +580,6 @@ fn on_off(value: bool) -> &'static str {
 fn detection_method_label(method: &RecordingDetectionMethod) -> &'static str {
     match method {
         RecordingDetectionMethod::Hyprland => "Hyprland",
-        RecordingDetectionMethod::PipeWire => "PipeWire",
-        RecordingDetectionMethod::Process => "Process",
     }
 }
 
@@ -636,10 +609,6 @@ fn set_auto_capture(settings: &mut Settings, value: bool) {
 
 fn set_capture_loopback(settings: &mut Settings, value: bool) {
     settings.audio.capture_loopback = value;
-}
-
-fn set_detection_method(settings: &mut Settings, value: RecordingDetectionMethod) {
-    settings.meeting.detection_method = value;
 }
 
 fn set_transcription_method(settings: &mut Settings, value: TranscriptionMethod) {
