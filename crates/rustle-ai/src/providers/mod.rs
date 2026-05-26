@@ -53,10 +53,10 @@ impl AiRuntime {
                 }
             },
             AiProvider::Openai | AiProvider::Anthropic => {
-                warn!(provider = ?settings.ai.provider, "hosted AI provider is not implemented yet");
+                warn!(provider = ?settings.ai.provider, "hosted AI provider is not supported in v0.1");
                 SummarisationOutcome::Ready(builtin::summarise_with_reason(
                     transcript,
-                    "The configured hosted AI provider is not implemented yet.",
+                    "The configured hosted AI provider is not supported in Rustle v0.1. Use llama.cpp or Ollama instead.",
                 ))
             }
         }
@@ -112,5 +112,23 @@ mod tests {
         assert!(!notes.markdown.contains("Generated transcript-like content"));
         assert!(!notes.markdown.contains("## Transcript"));
         assert!(!notes.markdown.contains("Actual transcript text."));
+    }
+
+    #[tokio::test]
+    async fn unsupported_hosted_provider_returns_explicit_reason() {
+        let mut runtime = AiRuntime;
+        let settings = Settings {
+            ai: rustle_core::AiSettings {
+                provider: AiProvider::Openai,
+                ..Settings::default().ai
+            },
+            ..Settings::default()
+        };
+
+        let SummarisationOutcome::Ready(notes) =
+            runtime.summarise(&settings, "Transcript content").await;
+
+        assert!(notes.markdown.contains("not supported in Rustle v0.1"));
+        assert!(notes.markdown.contains("llama.cpp or Ollama"));
     }
 }

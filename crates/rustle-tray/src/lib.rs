@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Category, Handle, MenuItem, Status, ToolTip, Tray, TrayMethods};
 use rustle_core::{
-    default_data_dir, resolve_notes_dir, resolve_transcripts_dir, tasks::spawn_logged,
-    AiProvider, AppEvent, CoreError, DetectionSource, EventReceiver, EventSender,
-    RecordingDetectionMethod, Settings, StoredDocument, StoredDocumentKind, TranscriptionMethod,
+    default_data_dir, resolve_notes_dir, resolve_transcripts_dir, tasks::spawn_logged, AiProvider,
+    AppEvent, CoreError, DetectionSource, EventReceiver, EventSender, RecordingDetectionMethod,
+    Settings, StoredDocument, StoredDocumentKind, TranscriptionMethod,
 };
 use rustle_storage::{list_notes, list_transcripts};
 use tokio::io::{self, AsyncBufReadExt, BufReader};
@@ -187,7 +187,10 @@ impl RustleTray {
     fn open_path(&self, path: PathBuf, prefer_editor: bool) {
         publish(
             &self.event_tx,
-            AppEvent::OpenPathRequested { path, prefer_editor },
+            AppEvent::OpenPathRequested {
+                path,
+                prefer_editor,
+            },
         );
     }
 
@@ -205,10 +208,7 @@ impl RustleTray {
         );
     }
 
-    fn request_settings_update(
-        &self,
-        update: impl FnOnce(&mut Settings) + Send + 'static,
-    ) {
+    fn request_settings_update(&self, update: impl FnOnce(&mut Settings) + Send + 'static) {
         request_settings_update(self.event_tx.clone(), update);
     }
 
@@ -332,7 +332,10 @@ fn notes_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
 
 fn transcripts_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
     let mut submenu = Vec::new();
-    let latest_transcript = tray.transcripts.first().map(|document| document.path.clone());
+    let latest_transcript = tray
+        .transcripts
+        .first()
+        .map(|document| document.path.clone());
     submenu.push(standard_item(
         "Open Latest _Transcript",
         latest_transcript.is_some(),
@@ -409,9 +412,14 @@ fn transcript_document_submenu(document: StoredDocument) -> MenuItem<RustleTray>
             standard_item("_Open", true, "document-open", move |tray| {
                 tray.open_path(open_path.clone(), true);
             }),
-            standard_item("_Summarise To New Note", true, "document-save", move |tray| {
-                tray.summarise_transcript(summarise_path.clone());
-            }),
+            standard_item(
+                "_Summarise To New Note",
+                true,
+                "document-save",
+                move |tray| {
+                    tray.summarise_transcript(summarise_path.clone());
+                },
+            ),
             standard_item("_Delete Permanently", true, "user-trash", move |tray| {
                 tray.delete_document(delete_path.clone(), StoredDocumentKind::Transcript);
             }),
@@ -448,9 +456,14 @@ fn settings_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
             transcription_method_submenu(&tray.settings),
             ai_provider_submenu(&tray.settings),
             MenuItem::Separator,
-            standard_item("Open Config In _Editor", true, "preferences-desktop-text-to-speech", |tray| {
-                publish(&tray.event_tx, AppEvent::OpenSettingsRequested);
-            }),
+            standard_item(
+                "Open Config In _Editor",
+                true,
+                "preferences-desktop-text-to-speech",
+                |tray| {
+                    publish(&tray.event_tx, AppEvent::OpenSettingsRequested);
+                },
+            ),
         ],
         ..SubMenu::default()
     }
@@ -501,11 +514,15 @@ fn transcription_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
                 set_transcription_method,
             ),
             choice_setting_item(
-                "OpenAI Whisper",
+                "OpenAI Whisper (unsupported)",
                 matches!(current, TranscriptionMethod::Openai),
                 "network-server",
                 TranscriptionMethod::Openai,
                 set_transcription_method,
+            ),
+            disabled_item(
+                "OpenAI transcription is not supported in v0.1",
+                "dialog-warning",
             ),
         ],
         ..SubMenu::default()
@@ -527,14 +544,14 @@ fn ai_provider_submenu(settings: &Settings) -> MenuItem<RustleTray> {
                 set_ai_provider,
             ),
             choice_setting_item(
-                "OpenAI",
+                "OpenAI (unsupported)",
                 matches!(current, AiProvider::Openai),
                 "network-server",
                 AiProvider::Openai,
                 set_ai_provider,
             ),
             choice_setting_item(
-                "Anthropic",
+                "Anthropic (unsupported)",
                 matches!(current, AiProvider::Anthropic),
                 "network-server",
                 AiProvider::Anthropic,
@@ -546,6 +563,10 @@ fn ai_provider_submenu(settings: &Settings) -> MenuItem<RustleTray> {
                 "network-workgroup",
                 AiProvider::Ollama,
                 set_ai_provider,
+            ),
+            disabled_item(
+                "Hosted OpenAI and Anthropic providers are not supported in v0.1",
+                "dialog-warning",
             ),
         ],
         ..SubMenu::default()
@@ -574,7 +595,11 @@ fn document_menu_label(document: &StoredDocument) -> String {
 }
 
 fn on_off(value: bool) -> &'static str {
-    if value { "On" } else { "Off" }
+    if value {
+        "On"
+    } else {
+        "Off"
+    }
 }
 
 fn detection_method_label(method: &RecordingDetectionMethod) -> &'static str {
@@ -586,15 +611,15 @@ fn detection_method_label(method: &RecordingDetectionMethod) -> &'static str {
 fn transcription_method_label(method: &TranscriptionMethod) -> &'static str {
     match method {
         TranscriptionMethod::Local => "Local Whisper",
-        TranscriptionMethod::Openai => "OpenAI Whisper",
+        TranscriptionMethod::Openai => "OpenAI Whisper (unsupported)",
     }
 }
 
 fn ai_provider_label(provider: &AiProvider) -> &'static str {
     match provider {
         AiProvider::LlamaCpp => "llama.cpp",
-        AiProvider::Openai => "OpenAI",
-        AiProvider::Anthropic => "Anthropic",
+        AiProvider::Openai => "OpenAI (unsupported)",
+        AiProvider::Anthropic => "Anthropic (unsupported)",
         AiProvider::Ollama => "Ollama",
     }
 }
@@ -879,8 +904,11 @@ fn resolve_icon_theme_path_from_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::{document_menu_label, resolve_icon_theme_path_from_candidates};
-    use rustle_core::{StoredDocument, StoredDocumentKind};
+    use super::{
+        ai_provider_label, document_menu_label, resolve_icon_theme_path_from_candidates,
+        transcription_method_label,
+    };
+    use rustle_core::{AiProvider, StoredDocument, StoredDocumentKind, TranscriptionMethod};
     use std::path::PathBuf;
 
     #[test]
@@ -906,5 +934,25 @@ mod tests {
         });
 
         assert_eq!(label, "team sync");
+    }
+
+    #[test]
+    fn unsupported_transcription_method_label_is_explicit() {
+        assert_eq!(
+            transcription_method_label(&TranscriptionMethod::Openai),
+            "OpenAI Whisper (unsupported)"
+        );
+    }
+
+    #[test]
+    fn unsupported_ai_provider_labels_are_explicit() {
+        assert_eq!(
+            ai_provider_label(&AiProvider::Openai),
+            "OpenAI (unsupported)"
+        );
+        assert_eq!(
+            ai_provider_label(&AiProvider::Anthropic),
+            "Anthropic (unsupported)"
+        );
     }
 }

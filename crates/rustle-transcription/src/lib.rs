@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use rustle_core::{
-    expand_tilde, resolve_transcripts_dir, safe_filename, tasks::spawn_logged, AppEvent,
-    CoreError, DetectionSource, EventReceiver, EventSender, Settings, TranscriptSegment,
-    TranscriptionMethod,
+    expand_tilde, resolve_transcripts_dir, safe_filename, tasks::spawn_logged, AppEvent, CoreError,
+    DetectionSource, EventReceiver, EventSender, Settings, TranscriptSegment, TranscriptionMethod,
 };
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -191,7 +190,7 @@ fn transcribe_audio_chunk_blocking(
     match settings.transcription.method {
         TranscriptionMethod::Local => transcribe_with_whisper(path, settings),
         TranscriptionMethod::Openai => Err(
-            "OpenAI transcription is configured, but Rust-native local transcription is implemented first"
+            "OpenAI transcription is not supported in Rustle v0.1; use Local Whisper instead"
                 .to_owned(),
         ),
     }
@@ -641,5 +640,23 @@ mod tests {
             test_audio_path_from_value("/tmp/rustle-fixture.wav").unwrap(),
             Some(PathBuf::from("/tmp/rustle-fixture.wav"))
         );
+    }
+
+    #[test]
+    fn spec_006_openai_transcription_message_marks_it_unsupported() {
+        let error = transcribe_audio_chunk_blocking(
+            Path::new("/tmp/fixture.wav"),
+            &Settings {
+                transcription: rustle_core::TranscriptionSettings {
+                    method: TranscriptionMethod::Openai,
+                    ..Settings::default().transcription
+                },
+                ..Settings::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("not supported in Rustle v0.1"));
+        assert!(error.contains("Local Whisper"));
     }
 }

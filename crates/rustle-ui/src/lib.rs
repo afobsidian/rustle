@@ -72,7 +72,10 @@ async fn notes_open_loop(mut event_rx: EventReceiver) {
                     open_path(&path, true, "settings file").await;
                 }
             }
-            Ok(AppEvent::OpenPathRequested { path, prefer_editor }) => {
+            Ok(AppEvent::OpenPathRequested {
+                path,
+                prefer_editor,
+            }) => {
                 open_path(&path, prefer_editor, "requested path").await;
             }
             Ok(AppEvent::QuitRequested) => break,
@@ -135,10 +138,12 @@ async fn configured_notes_dir() -> PathBuf {
     resolve_notes_dir(&settings).unwrap_or_else(|_| PathBuf::from("."))
 }
 
-async fn open_path(path: &PathBuf, prefer_editor: bool, purpose: &'static str) {
+async fn open_path(path: &Path, prefer_editor: bool, purpose: &'static str) {
     match launch_path(path, prefer_editor).await {
         Ok(()) => info!(path = %path.display(), prefer_editor, purpose, "opened path"),
-        Err(error) => warn!(%error, path = %path.display(), prefer_editor, purpose, "failed to open path"),
+        Err(error) => {
+            warn!(%error, path = %path.display(), prefer_editor, purpose, "failed to open path")
+        }
     }
 }
 
