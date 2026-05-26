@@ -28,7 +28,7 @@ quit
 help
 ```
 
-The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, Rustle also ships Hyprland-based Teams detection as the supported automatic path.
+The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, Rustle also ships Hyprland-based Teams detection as the supported automatic path for Microsoft Teams desktop windows and common Teams web titles in browsers such as Chromium, Chrome, and Firefox. Navigation views such as Calendar, Chat, Calls, and Activity are intentionally ignored so they do not start meetings by mistake.
 
 The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
 
@@ -70,7 +70,7 @@ Rustle now writes structured diagnostics to stderr and to `~/.local/share/rustle
 
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
-Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
+Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Rustle keeps polling Hyprland clients even when the event socket is temporarily unavailable, and reconnects to the socket automatically after Hyprland restarts so detection can recover without restarting the app. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
 
 ## DevOps
 

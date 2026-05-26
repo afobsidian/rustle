@@ -18,9 +18,44 @@ use uuid::Uuid;
 
 const HYPRLAND_SOCKET_NAME: &str = ".socket2.sock";
 const HYPRLAND_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const HYPRLAND_MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
 const HYPRLAND_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const NON_MEETING_TITLE_PREFIXES: &[&str] = &[
-    "activity", "calendar", "calls", "chat", "files", "teams", "tasks",
+    "activity",
+    "calendar",
+    "calls",
+    "chat",
+    "files",
+    "teams",
+    "tasks",
+    "communities",
+    "more",
+];
+const TEAMS_TITLE_SUFFIXES: &[&str] = &[
+    " | Microsoft Teams",
+    " - Microsoft Teams",
+    " – Microsoft Teams",
+    " — Microsoft Teams",
+    " | teams.microsoft.com",
+    " - teams.microsoft.com",
+    " – teams.microsoft.com",
+    " — teams.microsoft.com",
+];
+const BROWSER_TITLE_SUFFIXES: &[&str] = &[
+    " | Google Chrome",
+    " - Google Chrome",
+    " | Chromium",
+    " - Chromium",
+    " | Mozilla Firefox",
+    " - Mozilla Firefox",
+    " | Firefox",
+    " - Firefox",
+    " | Brave",
+    " - Brave",
+    " | Zen Browser",
+    " - Zen Browser",
+    " | Microsoft Edge",
+    " - Microsoft Edge",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +70,12 @@ struct MeetingCandidate {
     address: String,
     name: String,
     score: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListenerMode {
+    Polling,
+    Connected,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -331,15 +372,13 @@ fn normalize_meeting_name(raw_title: &str) -> Option<String> {
     }
 
     let mut normalized = trimmed.to_owned();
-    for suffix in [
-        " | Microsoft Teams",
-        " - Microsoft Teams",
-        " – Microsoft Teams",
-        " — Microsoft Teams",
-    ] {
-        if let Some(stripped) = normalized.strip_suffix(suffix) {
-            normalized = stripped.trim().to_owned();
-            break;
+    loop {
+        let stripped = strip_known_suffixes(&normalized, BROWSER_TITLE_SUFFIXES)
+            .or_else(|| strip_known_suffixes(&normalized, TEAMS_TITLE_SUFFIXES));
+
+        match stripped {
+            Some(next) if next != normalized => normalized = next,
+            _ => break,
         }
     }
 
@@ -355,6 +394,14 @@ fn normalize_meeting_name(raw_title: &str) -> Option<String> {
     Some(normalized)
 }
 
+fn strip_known_suffixes(value: &str, suffixes: &[&str]) -> Option<String> {
+    suffixes.iter().find_map(|suffix| {
+        value
+            .strip_suffix(suffix)
+            .map(|stripped| stripped.trim().to_owned())
+    })
+}
+
 fn is_meeting_title_allowed(name: &str) -> bool {
     let lowered = name.trim().to_ascii_lowercase();
     if lowered.is_empty() || lowered == "microsoft teams" {
@@ -367,26 +414,58 @@ fn is_meeting_title_allowed(name: &str) -> bool {
 }
 
 async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
-    let Some(socket_path) = hyprland_socket_path() else {
-        warn!("Hyprland socket path is unavailable; event listener disabled");
-        return;
-    };
+    let mut mode = ListenerMode::Polling;
+    let mut reconnect_delay = HYPRLAND_RECONNECT_DELAY;
 
     loop {
+        let Some(socket_path) = hyprland_socket_path() else {
+            log_listener_transition(
+                &mut mode,
+                ListenerMode::Polling,
+                "Hyprland socket path unavailable; staying in polling mode",
+            );
+            tokio::time::sleep(reconnect_delay).await;
+            reconnect_delay = next_reconnect_delay(reconnect_delay);
+            continue;
+        };
+
         match UnixStream::connect(&socket_path).await {
             Ok(stream) => {
-                info!(path = %socket_path.display(), "connected to Hyprland event socket");
+                log_listener_transition(
+                    &mut mode,
+                    ListenerMode::Connected,
+                    format!(
+                        "connected to Hyprland event socket at {}",
+                        socket_path.display()
+                    ),
+                );
+                reconnect_delay = HYPRLAND_RECONNECT_DELAY;
                 if read_hyprland_events(stream, &trigger_tx).await {
                     return;
                 }
-                warn!(path = %socket_path.display(), "Hyprland event socket closed; reconnecting");
+                log_listener_transition(
+                    &mut mode,
+                    ListenerMode::Polling,
+                    format!(
+                        "Hyprland event socket at {} closed; falling back to polling",
+                        socket_path.display()
+                    ),
+                );
             }
             Err(error) => {
-                warn!(%error, path = %socket_path.display(), "failed to connect to Hyprland event socket");
+                log_listener_transition(
+                    &mut mode,
+                    ListenerMode::Polling,
+                    format!(
+                        "failed to connect to Hyprland event socket at {}: {error}; falling back to polling",
+                        socket_path.display()
+                    ),
+                );
             }
         }
 
-        tokio::time::sleep(HYPRLAND_RECONNECT_DELAY).await;
+        tokio::time::sleep(reconnect_delay).await;
+        reconnect_delay = next_reconnect_delay(reconnect_delay);
     }
 }
 
@@ -461,6 +540,35 @@ fn is_relevant_hyprland_event(line: &str) -> bool {
     )
 }
 
+fn next_reconnect_delay(current: Duration) -> Duration {
+    current
+        .saturating_mul(2)
+        .min(HYPRLAND_MAX_RECONNECT_DELAY)
+        .max(HYPRLAND_RECONNECT_DELAY)
+}
+
+fn log_listener_transition(
+    mode: &mut ListenerMode,
+    next_mode: ListenerMode,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    if *mode == next_mode {
+        info!(mode = ?next_mode, "{message}");
+        return;
+    }
+
+    match next_mode {
+        ListenerMode::Connected => {
+            info!(from = ?*mode, to = ?next_mode, "Hyprland socket listener recovered: {message}");
+        }
+        ListenerMode::Polling => {
+            warn!(from = ?*mode, to = ?next_mode, "Hyprland socket listener degraded: {message}");
+        }
+    }
+    *mode = next_mode;
+}
+
 fn detection_enabled(settings: &Settings) -> bool {
     settings.meeting.auto_detect && is_hyprland_session()
 }
@@ -529,6 +637,18 @@ mod tests {
     }
 
     #[test]
+    fn strips_browser_and_web_suffixes_from_teams_titles() {
+        assert_eq!(
+            normalize_meeting_name("Planning Sync | Microsoft Teams | Google Chrome"),
+            Some("Planning Sync".to_owned())
+        );
+        assert_eq!(
+            normalize_meeting_name("Design Review | teams.microsoft.com - Chromium"),
+            Some("Design Review".to_owned())
+        );
+    }
+
+    #[test]
     fn rejects_non_meeting_navigation_titles() {
         let clients = vec![client(
             "0xabc",
@@ -539,6 +659,7 @@ mod tests {
         assert_eq!(select_meeting_candidate(&clients), None);
         assert!(!is_meeting_title_allowed("Calendar | Brent Wallace"));
         assert!(!is_meeting_title_allowed("Microsoft Teams"));
+        assert!(!is_meeting_title_allowed("Chat | teams.microsoft.com"));
     }
 
     #[test]
@@ -553,6 +674,20 @@ mod tests {
 
         assert_eq!(candidate.name, "Sprint Planning");
         assert!(is_meeting_title_allowed("Sprint Planning"));
+    }
+
+    #[test]
+    fn detects_web_meeting_titles_with_browser_suffixes() {
+        let clients = vec![client(
+            "0xabc",
+            "chromium",
+            "Roadmap Review | Microsoft Teams | Google Chrome",
+        )];
+
+        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
+
+        assert_eq!(candidate.name, "Roadmap Review");
+        assert_eq!(candidate.score, 2);
     }
 
     #[test]
@@ -595,5 +730,25 @@ mod tests {
                 std::env::remove_var("XDG_RUNTIME_DIR");
             },
         }
+    }
+
+    #[test]
+    fn reconnect_delay_backs_off_and_caps() {
+        assert_eq!(
+            next_reconnect_delay(Duration::from_secs(1)),
+            HYPRLAND_RECONNECT_DELAY
+        );
+        assert_eq!(
+            next_reconnect_delay(HYPRLAND_RECONNECT_DELAY),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            next_reconnect_delay(Duration::from_secs(45)),
+            HYPRLAND_MAX_RECONNECT_DELAY
+        );
+        assert_eq!(
+            next_reconnect_delay(HYPRLAND_MAX_RECONNECT_DELAY),
+            HYPRLAND_MAX_RECONNECT_DELAY
+        );
     }
 }

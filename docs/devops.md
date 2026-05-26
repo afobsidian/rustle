@@ -29,7 +29,7 @@ Rustle also reconciles start-on-login integration from `~/.config/rustle/config.
 
 Rustle writes structured diagnostics to stderr and to `~/.local/share/rustle/logs/rustle.log` by default. For release support, capture the relevant log excerpt from that file first; unhandled panics are also reported through the top-level panic hook with the log path in the emitted diagnostic context.
 
-The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available.
+The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available. The supported automatic scope for v0.1 is Microsoft Teams desktop windows plus common Teams web titles in Chromium-, Chrome-, and Firefox-based browsers. Calendar, Chat, Calls, Activity, and similar navigation views should not trigger meeting start.
 
 Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.
 
@@ -85,7 +85,9 @@ Hyprland detection smoke test:
 1. Run `make run` inside a Fedora Hyprland session with an SNI host such as Waybar.
 2. Join a Microsoft Teams meeting in the web or native client.
 3. Confirm the tray tooltip or menu shows the active meeting name and that auto-capture starts when `meeting.auto_capture = true`.
-4. Leave the meeting and confirm the active meeting state clears.
+4. Open a non-meeting Teams navigation view such as Calendar or Chat and confirm Rustle does not start a meeting from that window title alone.
+5. If possible, restart Hyprland or otherwise interrupt the Hyprland event socket, then confirm Rustle keeps polling for clients and resumes socket-driven detection once Hyprland is back.
+6. Leave the meeting and confirm the active meeting state clears.
 
 ## Local validation
 
