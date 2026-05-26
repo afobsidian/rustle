@@ -32,6 +32,8 @@ The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, R
 
 The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
 
+Recorder startup and shutdown are now bounded for release reliability. If a selected backend launches but does not produce audio bytes within a short startup window, Rustle stops that chunk attempt, logs the backend failure, and avoids publishing an empty chunk downstream.
+
 To test transcription with a known WAV instead of the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting.
 
 Rustle opens notes, transcript drafts, and the settings file by preferring `$VISUAL`, then `$EDITOR`, then `xdg-open`. This keeps editing predictable while the app remains tray-first.

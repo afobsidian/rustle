@@ -16,6 +16,8 @@ use uuid::Uuid;
 const RECORDING_SAMPLE_RATE: &str = "16000";
 const RECORDING_CHANNELS: &str = "1";
 const STOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const RECORDER_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const RECORDER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CHUNK_DURATION_SECS: u64 = 24 * 60 * 60;
 const MAX_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
@@ -221,7 +223,9 @@ async fn record_chunk(
         .spawn()
         .map_err(|error| format!("failed to launch recorder: {error}"))?;
     let mut interval = tokio::time::interval(STOP_POLL_INTERVAL);
+    let startup_timeout = tokio::time::sleep(RECORDER_STARTUP_TIMEOUT.min(config.chunk_duration));
     let duration = tokio::time::sleep(config.chunk_duration.max(STOP_POLL_INTERVAL));
+    tokio::pin!(startup_timeout);
     tokio::pin!(duration);
 
     loop {
@@ -234,16 +238,25 @@ async fn record_chunk(
                 return Ok(true);
             }
             _ = stop_rx.recv() => {
-                stop_child(&mut child).await;
+                stop_child(&mut child).await?;
                 return Ok(true);
             }
+            _ = &mut startup_timeout => {
+                if recorder_startup_stalled(file_len(path).await) {
+                    stop_child(&mut child).await?;
+                    return Err(format!(
+                        "recorder backend {backend:?} did not produce audio within {}s",
+                        RECORDER_STARTUP_TIMEOUT.as_secs()
+                    ));
+                }
+            }
             _ = &mut duration => {
-                stop_child(&mut child).await;
+                stop_child(&mut child).await?;
                 return Ok(false);
             }
             _ = interval.tick() => {
                 if file_len(path).await >= config.max_chunk_bytes {
-                    stop_child(&mut child).await;
+                    stop_child(&mut child).await?;
                     return Ok(false);
                 }
             }
@@ -251,13 +264,25 @@ async fn record_chunk(
     }
 }
 
-async fn stop_child(child: &mut tokio::process::Child) {
+async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
     if let Err(error) = child.start_kill() {
-        warn!(%error, "failed to stop audio recorder");
+        return Err(format!("failed to stop audio recorder: {error}"));
     }
-    if let Err(error) = child.wait().await {
-        warn!(%error, "failed to wait for stopped audio recorder");
+
+    match tokio::time::timeout(RECORDER_STOP_TIMEOUT, child.wait()).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(format!(
+            "failed to wait for stopped audio recorder: {error}"
+        )),
+        Err(_) => Err(format!(
+            "timed out waiting {}s for audio recorder to stop",
+            RECORDER_STOP_TIMEOUT.as_secs()
+        )),
     }
+}
+
+fn recorder_startup_stalled(file_len: u64) -> bool {
+    file_len <= 44
 }
 
 fn select_recorder_backend() -> Option<RecorderBackend> {
@@ -475,5 +500,25 @@ mod tests {
         assert!(is_executable_file(&path));
 
         std::fs::remove_file(path).expect("test file should be removed");
+    }
+
+    #[test]
+    fn spec_005_startup_timeout_requires_audio_bytes_beyond_wav_header() {
+        assert!(recorder_startup_stalled(0));
+        assert!(recorder_startup_stalled(44));
+        assert!(!recorder_startup_stalled(45));
+    }
+
+    #[tokio::test]
+    async fn spec_005_stop_child_returns_when_process_exits() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 0.1"])
+            .kill_on_drop(true)
+            .spawn()
+            .expect("test child should spawn");
+
+        stop_child(&mut child)
+            .await
+            .expect("child should stop cleanly");
     }
 }

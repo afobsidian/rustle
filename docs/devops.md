@@ -33,6 +33,8 @@ The manual flow above is the must-pass release path. On Fedora/Hyprland, also va
 
 Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.
 
+Audio recorder startup and shutdown are bounded for release use. If a recorder backend launches but fails to produce audio beyond the WAV header within the startup timeout, Rustle logs the backend failure, stops that chunk attempt, and avoids leaving a misleading empty chunk behind.
+
 The settings surface may still show `openai` transcription for planned future support, but OpenAI transcription is not supported in v0.1 and should be validated as a clear fallback path rather than a working feature.
 
 The default local AI provider is the llama.cpp backend using a quantized GGUF model. The first run may download model files, and failures still fall back to local Markdown warning notes.
