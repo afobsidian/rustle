@@ -108,7 +108,7 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
     let mut batch = LlamaBatch::new(batch_tokens, 1);
     let last_index =
         i32::try_from(prompt_tokens.len().saturating_sub(1)).map_err(|error| error.to_string())?;
-    for (index, token) in (0_i32..).zip(prompt_tokens.into_iter()) {
+    for (index, token) in (0_i32..).zip(prompt_tokens) {
         batch
             .add(token, index, &[0], index == last_index)
             .map_err(|error| error.to_string())?;

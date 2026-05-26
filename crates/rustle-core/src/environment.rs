@@ -3,8 +3,7 @@
 /// Returns true when the current process appears to be running inside a Hyprland session.
 #[must_use]
 pub fn is_hyprland_session() -> bool {
-    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")
-        .is_some_and(|value| !value.is_empty())
+    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|value| !value.is_empty())
 }
 
 /// Human-readable support statement for the current Rustle runtime contract.

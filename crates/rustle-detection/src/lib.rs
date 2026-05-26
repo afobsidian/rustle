@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Deserialize;
 use rustle_core::{
     is_hyprland_session, supported_session_label, tasks::spawn_logged, AppEvent, CoreError,
     DetectionSource, EventReceiver, EventSender, Settings,
 };
+use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::Command;
@@ -20,13 +20,7 @@ const HYPRLAND_SOCKET_NAME: &str = ".socket2.sock";
 const HYPRLAND_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const HYPRLAND_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const NON_MEETING_TITLE_PREFIXES: &[&str] = &[
-    "activity",
-    "calendar",
-    "calls",
-    "chat",
-    "files",
-    "teams",
-    "tasks",
+    "activity", "calendar", "calls", "chat", "files", "teams", "tasks",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +61,10 @@ pub async fn initialise(
     event_rx: Option<EventReceiver>,
 ) -> Result<(), CoreError> {
     if let Some(receiver) = event_rx {
-        spawn_logged("hyprland-detection-loop", detection_loop(event_tx, receiver));
+        spawn_logged(
+            "hyprland-detection-loop",
+            detection_loop(event_tx, receiver),
+        );
     }
 
     Ok(())
@@ -364,11 +361,7 @@ fn is_meeting_title_allowed(name: &str) -> bool {
         return false;
     }
 
-    let prefix = lowered
-        .split('|')
-        .next()
-        .map(str::trim)
-        .unwrap_or_default();
+    let prefix = lowered.split('|').next().map(str::trim).unwrap_or_default();
 
     !NON_MEETING_TITLE_PREFIXES.contains(&prefix)
 }
@@ -397,10 +390,7 @@ async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
     }
 }
 
-async fn read_hyprland_events(
-    stream: UnixStream,
-    trigger_tx: &mpsc::UnboundedSender<()>,
-) -> bool {
+async fn read_hyprland_events(stream: UnixStream, trigger_tx: &mpsc::UnboundedSender<()>) -> bool {
     let mut lines = BufReader::new(stream).lines();
 
     loop {
@@ -436,7 +426,8 @@ fn hyprland_socket_path_from_signature(signature: &str) -> PathBuf {
 fn hyprland_socket_candidates(signature: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(2);
 
-    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty())
+    {
         candidates.push(
             PathBuf::from(runtime_dir)
                 .join("hypr")

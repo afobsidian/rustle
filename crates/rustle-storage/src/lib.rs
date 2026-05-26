@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rustle_core::{
-    is_safe_child, resolve_notes_dir, resolve_transcripts_dir, safe_filename,
-    tasks::spawn_logged, AppEvent, CoreError, EventReceiver, EventSender, MeetingNotes,
-    Settings, StoredDocument, StoredDocumentKind,
+    is_safe_child, resolve_notes_dir, resolve_transcripts_dir, safe_filename, tasks::spawn_logged,
+    AppEvent, CoreError, EventReceiver, EventSender, MeetingNotes, Settings, StoredDocument,
+    StoredDocumentKind,
 };
 use tokio::fs;
 use tracing::{info, warn};
@@ -50,7 +50,9 @@ async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
                         info!(path = %path.display(), ?kind, "document deleted");
                         publish(&event_tx, AppEvent::DocumentDeleted { path, kind });
                     }
-                    Err(error) => warn!(%error, path = %path.display(), ?kind, "failed to delete document"),
+                    Err(error) => {
+                        warn!(%error, path = %path.display(), ?kind, "failed to delete document")
+                    }
                 }
             }
             Ok(AppEvent::SettingsChanged(updated_settings)) => {
