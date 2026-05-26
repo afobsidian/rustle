@@ -26,11 +26,18 @@ pub async fn initialise(
 }
 
 async fn notes_open_loop(mut event_rx: EventReceiver) {
+    let mut meeting_active = false;
     let mut latest_note: Option<PathBuf> = None;
     let mut latest_transcript: Option<PathBuf> = None;
 
     loop {
         match event_rx.recv().await {
+            Ok(AppEvent::MeetingStarted { .. }) => {
+                meeting_active = true;
+            }
+            Ok(AppEvent::MeetingEnded { .. }) => {
+                meeting_active = false;
+            }
             Ok(AppEvent::NoteSaved { path, .. }) => {
                 latest_note = Some(path);
             }
@@ -53,12 +60,14 @@ async fn notes_open_loop(mut event_rx: EventReceiver) {
                 }
             },
             Ok(AppEvent::OpenNotesRequested) => {
-                let path = match latest_note.clone() {
-                    Some(path) => path,
-                    None => configured_notes_dir().await,
-                };
-                let prefer_editor = path.is_file();
-                open_path(&path, prefer_editor, "notes").await;
+                let notes_dir = configured_notes_dir().await;
+                let (path, prefer_editor, purpose) = select_notes_open_target(
+                    meeting_active,
+                    latest_transcript.as_ref(),
+                    latest_note.as_ref(),
+                    &notes_dir,
+                );
+                open_path(&path, prefer_editor, purpose).await;
             }
             Ok(AppEvent::OpenTranscriptRequested) => {
                 if let Some(path) = latest_transcript.clone() {
@@ -138,6 +147,25 @@ async fn configured_notes_dir() -> PathBuf {
     resolve_notes_dir(&settings).unwrap_or_else(|_| PathBuf::from("."))
 }
 
+fn select_notes_open_target(
+    meeting_active: bool,
+    latest_transcript: Option<&PathBuf>,
+    latest_note: Option<&PathBuf>,
+    notes_dir: &Path,
+) -> (PathBuf, bool, &'static str) {
+    if meeting_active {
+        if let Some(path) = latest_transcript {
+            return (path.clone(), true, "current transcript draft");
+        }
+    }
+
+    if let Some(path) = latest_note {
+        return (path.clone(), true, "latest note");
+    }
+
+    (notes_dir.to_path_buf(), false, "notes folder")
+}
+
 async fn open_path(path: &Path, prefer_editor: bool, purpose: &'static str) {
     match launch_path(path, prefer_editor).await {
         Ok(()) => info!(path = %path.display(), prefer_editor, purpose, "opened path"),
@@ -205,9 +233,11 @@ struct CommandLine {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_settings_file_at, preferred_editor_command, CommandLine};
+    use super::{
+        ensure_settings_file_at, preferred_editor_command, select_notes_open_target, CommandLine,
+    };
     use std::ffi::OsString;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
@@ -268,5 +298,36 @@ mod tests {
             Some(value) => std::env::set_var("EDITOR", value),
             None => std::env::remove_var("EDITOR"),
         }
+    }
+
+    #[test]
+    fn open_notes_prefers_transcript_while_meeting_is_active() {
+        let transcript = PathBuf::from("/tmp/current-transcript.txt");
+        let note = PathBuf::from("/tmp/latest-note.md");
+        let notes_dir = Path::new("/tmp/notes");
+
+        let target = select_notes_open_target(true, Some(&transcript), Some(&note), notes_dir);
+
+        assert_eq!(target, (transcript, true, "current transcript draft"));
+    }
+
+    #[test]
+    fn open_notes_prefers_latest_note_when_meeting_is_idle() {
+        let transcript = PathBuf::from("/tmp/current-transcript.txt");
+        let note = PathBuf::from("/tmp/latest-note.md");
+        let notes_dir = Path::new("/tmp/notes");
+
+        let target = select_notes_open_target(false, Some(&transcript), Some(&note), notes_dir);
+
+        assert_eq!(target, (note, true, "latest note"));
+    }
+
+    #[test]
+    fn open_notes_falls_back_to_notes_folder_without_documents() {
+        let notes_dir = Path::new("/tmp/notes");
+
+        let target = select_notes_open_target(false, None, None, notes_dir);
+
+        assert_eq!(target, (PathBuf::from("/tmp/notes"), false, "notes folder"));
     }
 }

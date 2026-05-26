@@ -14,10 +14,12 @@ Rustle targets Hyprland and starts as a tray app when an SNI host is available. 
 
 - `start [meeting name]`: Starts a manual meeting and logs a draft path.
 - `stop`: Reads the draft, generates notes, and saves.
-- `open`: Opens the latest saved note, or the notes folder if none exist.
+- `open`: Opens the current transcript draft during an active meeting when one exists, otherwise the latest saved note, otherwise the notes folder.
 - `transcript`: Opens the latest transcript draft when one exists.
 - `settings`: Opens the TOML settings file in the configured editor.
 - `quit`: Requests graceful application shutdown.
+
+Rustle opens notes, transcript drafts, and the settings file by preferring `$VISUAL`, then `$EDITOR`, then `xdg-open`.
 
 The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available.
 
@@ -56,8 +58,9 @@ Manual smoke test:
 3. Review, edit, or replace the sample text in the draft under `~/.local/share/rustle/transcripts/` and save it.
 4. Enter `stop`.
 5. Confirm a Markdown note appears under `~/.local/share/rustle/notes/`.
-6. Enter `open` to print the latest note or notes folder path.
-7. Enter `quit` and confirm the process exits.
+6. While the meeting is active, use `open` to confirm Rustle opens the current transcript draft when one exists.
+7. After `stop`, run `open` again and confirm Rustle opens the latest saved note, or the notes folder when no saved note exists.
+8. Enter `quit` and confirm the process exits.
 
 Known WAV transcription test:
 

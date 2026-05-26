@@ -14,7 +14,7 @@ Rustle starts as a StatusNotifierItem system tray app on Hyprland with an SNI ho
 make run
 ```
 
-Tray actions include opening saved notes, opening the latest transcript draft, starting or stopping a manual meeting, opening the settings TOML file, and quitting Rustle. Left-clicking the tray icon opens the latest note when one exists, otherwise the notes folder.
+Tray actions are grouped around the user workflow: meeting controls, review and editing, capture preferences, and provider/configuration. Left-clicking the tray icon and the `open` command now follow the same rule: open the current transcript draft during an active meeting when one exists, otherwise open the latest saved note, otherwise open the notes folder.
 
 Available fallback terminal commands while Rustle is running:
 
@@ -33,6 +33,8 @@ The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, R
 The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
 
 To test transcription with a known WAV instead of the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting.
+
+Rustle opens notes, transcript drafts, and the settings file by preferring `$VISUAL`, then `$EDITOR`, then `xdg-open`. This keeps editing predictable while the app remains tray-first.
 
 Local transcription uses `whisper-rs` and reads the model configured by `transcription.model_path`. When the default model path is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing:
 

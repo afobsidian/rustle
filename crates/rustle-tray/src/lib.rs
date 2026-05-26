@@ -6,8 +6,8 @@ use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Category, Handle, MenuItem, Status, ToolTip, Tray, TrayMethods};
 use rustle_core::{
     default_data_dir, resolve_notes_dir, resolve_transcripts_dir, tasks::spawn_logged, AiProvider,
-    AppEvent, CoreError, DetectionSource, EventReceiver, EventSender, RecordingDetectionMethod,
-    Settings, StoredDocument, StoredDocumentKind, TranscriptionMethod,
+    AppEvent, CoreError, DetectionSource, EventReceiver, EventSender, Settings, StoredDocument,
+    StoredDocumentKind, TranscriptionMethod,
 };
 use rustle_storage::{list_notes, list_transcripts};
 use tokio::io::{self, AsyncBufReadExt, BufReader};
@@ -112,28 +112,23 @@ impl Tray for RustleTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        if let Some(document) = self.notes.first() {
-            self.open_path(document.path.clone(), true);
-            return;
-        }
-
-        if let Some(path) = self.notes_dir() {
-            self.open_path(path, false);
-            return;
-        }
-
-        publish(&self.event_tx, AppEvent::OpenNotesRequested);
+        self.open_notes();
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         vec![
-            notes_submenu(self),
-            transcripts_submenu(self),
             current_meeting_item(self.active_meeting.as_ref()),
+            workflow_status_item(
+                self.active_meeting.is_some(),
+                self.transcripts.first(),
+                self.notes.first(),
+            ),
             MenuItem::Separator,
             meeting_submenu(self.active_meeting.is_some()),
+            review_and_edit_submenu(self),
             MenuItem::Separator,
-            settings_submenu(self),
+            capture_preferences_submenu(self),
+            providers_submenu(self),
             standard_item("_Quit", true, "application-exit", |tray| {
                 tray.stop_active_meeting();
                 publish(&tray.event_tx, AppEvent::QuitRequested);
@@ -192,6 +187,14 @@ impl RustleTray {
                 prefer_editor,
             },
         );
+    }
+
+    fn open_notes(&self) {
+        publish(&self.event_tx, AppEvent::OpenNotesRequested);
+    }
+
+    fn open_transcript(&self) {
+        publish(&self.event_tx, AppEvent::OpenTranscriptRequested);
     }
 
     fn delete_document(&self, path: PathBuf, kind: StoredDocumentKind) {
@@ -261,6 +264,21 @@ fn current_meeting_item(active_meeting: Option<&(Uuid, String)>) -> MenuItem<Rus
     .into()
 }
 
+fn workflow_status_item(
+    meeting_active: bool,
+    latest_transcript: Option<&StoredDocument>,
+    latest_note: Option<&StoredDocument>,
+) -> MenuItem<RustleTray> {
+    disabled_item(
+        workflow_status_label(
+            meeting_active,
+            latest_transcript.is_some(),
+            latest_note.is_some(),
+        ),
+        "document-edit",
+    )
+}
+
 fn meeting_submenu(meeting_active: bool) -> MenuItem<RustleTray> {
     SubMenu {
         label: "_Meeting".to_owned(),
@@ -288,17 +306,45 @@ fn meeting_submenu(meeting_active: bool) -> MenuItem<RustleTray> {
     .into()
 }
 
-fn notes_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+fn review_and_edit_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
     let mut submenu = Vec::new();
+    let draft_available = !tray.transcripts.is_empty();
+    submenu.push(standard_item(
+        "Open Current _Draft",
+        draft_available,
+        "text-x-generic",
+        |tray| {
+            tray.open_transcript();
+        },
+    ));
+
+    if tray.active_meeting.is_some() && !draft_available {
+        submenu.push(disabled_item(
+            "Transcript draft appears after the first saved chunk",
+            "dialog-information",
+        ));
+    }
+
     let latest_note = tray.notes.first().map(|document| document.path.clone());
+    let latest_note_available = latest_note.is_some();
     submenu.push(standard_item(
         "Open _Latest Note",
-        latest_note.is_some(),
+        latest_note_available,
         "document-open",
         move |tray| {
             if let Some(path) = latest_note.clone() {
                 tray.open_path(path, true);
             }
+        },
+    ));
+
+    let notes_request_enabled = latest_note_available || tray.notes_dir().is_some();
+    submenu.push(standard_item(
+        "Open _Current Work",
+        notes_request_enabled || draft_available,
+        "document-open",
+        |tray| {
+            tray.open_notes();
         },
     ));
 
@@ -310,39 +356,6 @@ fn notes_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
         move |tray| {
             if let Some(path) = notes_dir.clone() {
                 tray.open_path(path, false);
-            }
-        },
-    ));
-
-    if tray.notes.is_empty() {
-        submenu.push(disabled_item("No saved notes yet", "text-markdown"));
-    } else {
-        submenu.push(MenuItem::Separator);
-        submenu.extend(tray.notes.iter().cloned().map(note_document_submenu));
-    }
-
-    SubMenu {
-        label: format!("_Notes ({})", tray.notes.len()),
-        icon_name: "text-markdown".to_owned(),
-        submenu,
-        ..SubMenu::default()
-    }
-    .into()
-}
-
-fn transcripts_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
-    let mut submenu = Vec::new();
-    let latest_transcript = tray
-        .transcripts
-        .first()
-        .map(|document| document.path.clone());
-    submenu.push(standard_item(
-        "Open Latest _Transcript",
-        latest_transcript.is_some(),
-        "text-x-generic",
-        move |tray| {
-            if let Some(path) = latest_transcript.clone() {
-                tray.open_path(path, true);
             }
         },
     ));
@@ -359,10 +372,41 @@ fn transcripts_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
         },
     ));
 
+    submenu.push(MenuItem::Separator);
+    submenu.push(recent_notes_submenu(tray));
+    submenu.push(recent_transcripts_submenu(tray));
+
+    SubMenu {
+        label: "_Review & Edit".to_owned(),
+        icon_name: "document-edit".to_owned(),
+        submenu,
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn recent_notes_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+    let mut submenu = Vec::new();
+    if tray.notes.is_empty() {
+        submenu.push(disabled_item("No saved notes yet", "text-markdown"));
+    } else {
+        submenu.extend(tray.notes.iter().cloned().map(note_document_submenu));
+    }
+
+    SubMenu {
+        label: format!("Recent _Notes ({})", tray.notes.len()),
+        icon_name: "text-markdown".to_owned(),
+        submenu,
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn recent_transcripts_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+    let mut submenu = Vec::new();
     if tray.transcripts.is_empty() {
         submenu.push(disabled_item("No saved transcripts yet", "text-x-generic"));
     } else {
-        submenu.push(MenuItem::Separator);
         submenu.extend(
             tray.transcripts
                 .iter()
@@ -372,7 +416,7 @@ fn transcripts_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
     }
 
     SubMenu {
-        label: format!("_Transcripts ({})", tray.transcripts.len()),
+        label: format!("Recent _Transcripts ({})", tray.transcripts.len()),
         icon_name: "text-x-generic".to_owned(),
         submenu,
         ..SubMenu::default()
@@ -429,33 +473,42 @@ fn transcript_document_submenu(document: StoredDocument) -> MenuItem<RustleTray>
     .into()
 }
 
-fn settings_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+fn capture_preferences_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
     SubMenu {
-        label: "_Settings".to_owned(),
-        icon_name: "preferences-system".to_owned(),
+        label: "_Capture Preferences".to_owned(),
+        icon_name: "media-record".to_owned(),
         submenu: vec![
             bool_setting_submenu(
-                "Auto Detect",
+                "Detect meetings automatically",
                 tray.settings.meeting.auto_detect,
                 "system-search",
                 set_auto_detect,
             ),
             bool_setting_submenu(
-                "Auto Capture",
+                "Start recording automatically",
                 tray.settings.meeting.auto_capture,
                 "media-record",
                 set_auto_capture,
             ),
             bool_setting_submenu(
-                "Capture Loopback",
+                "Include loopback audio",
                 tray.settings.audio.capture_loopback,
                 "audio-card",
                 set_capture_loopback,
             ),
-            detection_method_submenu(&tray.settings),
+        ],
+        ..SubMenu::default()
+    }
+    .into()
+}
+
+fn providers_submenu(tray: &RustleTray) -> MenuItem<RustleTray> {
+    SubMenu {
+        label: "_Providers & Config".to_owned(),
+        icon_name: "preferences-system".to_owned(),
+        submenu: vec![
             transcription_method_submenu(&tray.settings),
             ai_provider_submenu(&tray.settings),
-            MenuItem::Separator,
             standard_item(
                 "Open Config In _Editor",
                 true,
@@ -490,14 +543,6 @@ fn bool_setting_submenu(
         ..SubMenu::default()
     }
     .into()
-}
-
-fn detection_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
-    let current = settings.meeting.detection_method.clone();
-    disabled_item(
-        format!("Detection Method: {}", detection_method_label(&current)),
-        "preferences-system-windows",
-    )
 }
 
 fn transcription_method_submenu(settings: &Settings) -> MenuItem<RustleTray> {
@@ -594,17 +639,29 @@ fn document_menu_label(document: &StoredDocument) -> String {
     document.title.clone()
 }
 
+fn workflow_status_label(
+    meeting_active: bool,
+    transcript_available: bool,
+    note_available: bool,
+) -> &'static str {
+    if meeting_active {
+        if transcript_available {
+            "Editing: Current transcript draft"
+        } else {
+            "Editing: Waiting for first transcript draft"
+        }
+    } else if note_available {
+        "Reviewing: Latest saved note"
+    } else {
+        "Reviewing: Notes folder"
+    }
+}
+
 fn on_off(value: bool) -> &'static str {
     if value {
         "On"
     } else {
         "Off"
-    }
-}
-
-fn detection_method_label(method: &RecordingDetectionMethod) -> &'static str {
-    match method {
-        RecordingDetectionMethod::Hyprland => "Hyprland",
     }
 }
 
@@ -906,10 +963,52 @@ fn resolve_icon_theme_path_from_candidates(
 mod tests {
     use super::{
         ai_provider_label, document_menu_label, resolve_icon_theme_path_from_candidates,
-        transcription_method_label,
+        transcription_method_label, workflow_status_label, RustleTray,
     };
-    use rustle_core::{AiProvider, StoredDocument, StoredDocumentKind, TranscriptionMethod};
+    use ksni::menu::MenuItem;
+    use ksni::Tray;
+    use rustle_core::{
+        AiProvider, EventBus, Settings, StoredDocument, StoredDocumentKind, TranscriptionMethod,
+    };
     use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn sample_document(kind: StoredDocumentKind, suffix: &str, title: &str) -> StoredDocument {
+        StoredDocument {
+            kind,
+            path: PathBuf::from(format!("/tmp/1779283974_{suffix}")),
+            title: title.to_owned(),
+            timestamp_seconds: 1_779_283_974,
+        }
+    }
+
+    fn sample_tray() -> RustleTray {
+        RustleTray {
+            event_tx: EventBus::new().sender(),
+            active_meeting: Some((Uuid::new_v4(), "planning sync".to_owned())),
+            settings: Settings::default(),
+            notes: vec![sample_document(
+                StoredDocumentKind::Note,
+                "team_sync.md",
+                "team sync",
+            )],
+            transcripts: vec![sample_document(
+                StoredDocumentKind::Transcript,
+                "team_sync.txt",
+                "team sync",
+            )],
+        }
+    }
+
+    fn menu_item_label(item: &MenuItem<RustleTray>) -> String {
+        match item {
+            MenuItem::Standard(item) => item.label.clone(),
+            MenuItem::Separator => "---".to_owned(),
+            MenuItem::Checkmark(item) => item.label.clone(),
+            MenuItem::SubMenu(item) => item.label.clone(),
+            MenuItem::RadioGroup(_) => "<radio>".to_owned(),
+        }
+    }
 
     #[test]
     fn uses_first_existing_icon_path_candidate() {
@@ -953,6 +1052,80 @@ mod tests {
         assert_eq!(
             ai_provider_label(&AiProvider::Anthropic),
             "Anthropic (unsupported)"
+        );
+    }
+
+    #[test]
+    fn workflow_status_marks_transcript_during_active_meeting() {
+        assert_eq!(
+            workflow_status_label(true, true, true),
+            "Editing: Current transcript draft"
+        );
+        assert_eq!(
+            workflow_status_label(true, false, true),
+            "Editing: Waiting for first transcript draft"
+        );
+        assert_eq!(
+            workflow_status_label(false, true, true),
+            "Reviewing: Latest saved note"
+        );
+        assert_eq!(
+            workflow_status_label(false, false, false),
+            "Reviewing: Notes folder"
+        );
+    }
+
+    #[test]
+    fn top_level_menu_groups_workflow_before_configuration() {
+        let tray = sample_tray();
+        let labels = tray.menu().iter().map(menu_item_label).collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec![
+                "Current _Meeting: planning sync",
+                "Editing: Current transcript draft",
+                "---",
+                "_Meeting",
+                "_Review & Edit",
+                "---",
+                "_Capture Preferences",
+                "_Providers & Config",
+                "_Quit",
+            ]
+        );
+    }
+
+    #[test]
+    fn review_submenu_exposes_current_and_historical_documents() {
+        let tray = sample_tray();
+        let review_menu = tray
+            .menu()
+            .into_iter()
+            .find_map(|item| match item {
+                MenuItem::SubMenu(menu) if menu.label == "_Review & Edit" => Some(menu),
+                _ => None,
+            })
+            .expect("review menu should exist");
+
+        let labels = review_menu
+            .submenu
+            .iter()
+            .map(menu_item_label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec![
+                "Open Current _Draft",
+                "Open _Latest Note",
+                "Open _Current Work",
+                "Open Notes _Folder",
+                "Open Transcript _Folder",
+                "---",
+                "Recent _Notes (1)",
+                "Recent _Transcripts (1)",
+            ]
         );
     }
 }
