@@ -4,7 +4,7 @@ Rustle uses the repository `Makefile` as the single entry point for local and CI
 
 ## Local run
 
-Run the manual notes MVP from the repository root:
+Run the tray-first v0.1 workflow from the repository root:
 
 ```sh
 make run
@@ -12,14 +12,18 @@ make run
 
 Rustle targets Hyprland and starts as a tray app when an SNI host is available. Terminal commands remain as a fallback control path when the tray host or D-Bus is unavailable:
 
-| Command                | Purpose                                          |
-| ---------------------- | ------------------------------------------------ |
-| `start [meeting name]` | Starts a manual meeting and logs a draft path.   |
-| `stop`                 | Reads the draft, generates notes, and saves.     |
-| `open`                 | Logs the latest saved note or notes folder path. |
-| `quit`                 | Requests graceful application shutdown.          |
+- `start [meeting name]`: Starts a manual meeting and logs a draft path.
+- `stop`: Reads the draft, generates notes, and saves.
+- `open`: Opens the latest saved note, or the notes folder if none exist.
+- `transcript`: Opens the latest transcript draft when one exists.
+- `settings`: Opens the TOML settings file in the configured editor.
+- `quit`: Requests graceful application shutdown.
+
+The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available.
 
 Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.
+
+The settings surface may still show `openai` transcription for planned future support, but OpenAI transcription is not supported in v0.1 and should be validated as a clear fallback path rather than a working feature.
 
 The default local AI provider is the llama.cpp backend using a quantized GGUF model. The first run may download model files, and failures still fall back to local Markdown warning notes.
 
@@ -34,6 +38,8 @@ hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 ```
 
 Ollama remains available as an optional provider with `provider = "ollama"`. If the configured AI provider fails, Rustle writes fallback notes with the failure reason and keeps the transcript draft separate. A dev container may not expose a Hyprland session or SNI tray host, so validate desktop tray behavior from a Fedora Hyprland session.
+
+The settings surface may still show hosted `openai` and `anthropic` AI providers for planned future support, but they are not supported in v0.1 and should be validated as explicit fallback behavior, not as release-ready integrations.
 
 Benchmark available providers on the current machine with:
 
@@ -60,6 +66,13 @@ Known WAV transcription test:
 3. Enter `start Known WAV Test`.
 4. Enter `stop`; Rustle skips live mic capture and transcribes the configured WAV.
 5. Confirm the transcript draft contains text derived from the WAV and the saved note contains generated meeting notes without embedding the transcript.
+
+Hyprland detection smoke test:
+
+1. Run `make run` inside a Fedora Hyprland session with an SNI host such as Waybar.
+2. Join a Microsoft Teams meeting in the web or native client.
+3. Confirm the tray tooltip or menu shows the active meeting name and that auto-capture starts when `meeting.auto_capture = true`.
+4. Leave the meeting and confirm the active meeting state clears.
 
 ## Local validation
 
@@ -109,11 +122,11 @@ Artifacts are written to `dist/` as:
 
 ## Specification test traceability
 
-Tests should cite the relevant `SPECS.md` identifier in the test name. Current automated coverage focuses on implemented foundations:
+Tests should cite the relevant spec identifier from `docs/specification.md` in the test name. Current automated coverage focuses on implemented foundations:
 
 | Spec                           | Automated coverage                                                                                                                                 |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SPEC-009 · Persistent Settings | `crates/rustle-core/tests/spec_009_settings.rs` validates defaults, TOML round trips, invalid-value fallback, and owner-only settings permissions. |
 | SPEC-012 · Fault Tolerance     | `crates/rustle-core/tests/spec_012_event_bus.rs` validates event bus delivery and no-receiver error reporting.                                     |
 
-Future feature work should add matching `spec_<id>_*.rs` tests with mocks for DBus, Hyprland IPC, PipeWire, transcription, AI, and storage behaviors described in `SPECS.md`.
+Future feature work should add matching `spec_<id>_*.rs` tests with mocks for DBus, Hyprland IPC, PipeWire, transcription, AI, and storage behaviors described in `docs/specification.md`.

@@ -14,7 +14,7 @@ Rustle starts as a StatusNotifierItem system tray app on Hyprland with an SNI ho
 make run
 ```
 
-Tray actions include opening notes, opening the latest transcript draft, starting or stopping a manual meeting, opening the settings TOML file, and quitting Rustle. Left-clicking the tray icon opens notes.
+Tray actions include opening saved notes, opening the latest transcript draft, starting or stopping a manual meeting, opening the settings TOML file, and quitting Rustle. Left-clicking the tray icon opens the latest note when one exists, otherwise the notes folder.
 
 Available fallback terminal commands while Rustle is running:
 
@@ -27,6 +27,8 @@ settings
 quit
 help
 ```
+
+The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, Rustle also ships Hyprland-based Teams detection as the supported automatic path.
 
 The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
 
@@ -42,6 +44,8 @@ model_path = "~/.local/share/rustle/models/ggml-base.en.bin"
 
 For a custom `transcription.model_path`, download or place a compatible whisper.cpp `ggml` model at that path yourself.
 
+The settings surface still shows `openai` as a transcription option so the planned support shape stays visible, but OpenAI transcription is not supported in v0.1 yet. If selected, Rustle logs a clear warning and instructs you to use local Whisper instead.
+
 The default AI provider is the local `llama_cpp` backend using a quantized GGUF model. The first run may download model files, and failures still fall back to locally generated Markdown warning notes.
 
 To point Rustle at a different local llama.cpp model, set this in `~/.config/rustle/config.toml`:
@@ -54,11 +58,11 @@ hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
 hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 ```
 
-Ollama remains available as an optional provider by setting `provider = "ollama"`. If the configured AI provider is unavailable, Rustle still saves fallback notes with the failure reason. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
+Ollama remains available as an optional provider by setting `provider = "ollama"`. The settings surface also keeps `openai` and `anthropic` visible, but those hosted providers are not supported in v0.1 yet. If a hosted provider is selected, Rustle saves fallback notes with the reason instead of failing silently. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
 
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
-Hyprland-based Teams detection and a native notes window are still future work; the current app wires tray controls, application lifecycle, audio-backed transcription, and note-generation pipeline so it can be exercised end to end.
+Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
 
 ## DevOps
 

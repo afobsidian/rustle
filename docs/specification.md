@@ -1,8 +1,10 @@
-# Granola Clone – Specification Document
+# Rustle Specification Document
+
+<!-- markdownlint-disable MD024 -->
 
 > Platform: Linux (Fedora / Hyprland)  
 > Language: Rust  
-> Purpose: AI-powered meeting notes app with system tray presence and Teams auto-launch
+> Purpose: AI-powered meeting notes app with system tray presence and Teams detection
 
 ---
 
@@ -10,11 +12,13 @@
 
 A Rust-native desktop application that sits in the system tray, automatically detects Microsoft Teams meetings, and provides AI-assisted note-taking during those meetings. Built for personal use on a Fedora Linux system running the Hyprland Wayland compositor.
 
+Release scope note: Rustle v0.1 is tray-first and file-backed. The supported paths today are the manual meeting workflow plus Hyprland-based Teams detection on Fedora/Hyprland, local Whisper transcription, `llama_cpp` as the default AI provider, and editor or desktop-opener based note, transcript, and settings access. Native notes/settings windows, desktop notifications, autostart integration, and SQLite-backed search remain follow-on work.
+
 ---
 
 ## 2. Architecture Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │                    App Core                     │
 │  ┌─────────────┐  ┌──────────┐  ┌───────────┐  │
@@ -26,19 +30,16 @@ A Rust-native desktop application that sits in the system tray, automatically de
 └─────────────────────────────────────────────────┘
 ```
 
-**Key crates (expected):**
+**Key crates and runtime components (current v0.1):**
 
-- `tray-icon` – Hyprland system tray integration
-- `ksni` or `zbus` – StatusNotifierItem DBus protocol (Wayland tray)
-- `serde` / `serde_json` / `toml` – config serialisation
-- `tokio` – async runtime
-- `cpal` – cross-platform audio capture
-- `whisper-rs` or `openai` – transcription
+- `ksni` – StatusNotifierItem tray integration on Linux desktop environments with SNI support
+- `serde` / `serde_json` / `toml` – config serialisation and Hyprland JSON parsing
+- `tokio` – async runtime, process execution, Unix sockets, and task orchestration
+- `whisper-rs` – local Whisper transcription
 - `llama-cpp-2` – in-process local AI note generation
-- `rusqlite` – local note persistence
-- `dbus` (via `zbus`) – system integration, Teams detection
-- `notify` – filesystem watching (for Teams process/socket detection)
-- `xdg` – XDG base dir for config/data paths
+- `tracing` / `tracing-subscriber` – diagnostics and logging
+- External recorder binaries (`pw-record`, `parecord`, `arecord`) – audio capture selected at runtime
+- Hyprland IPC (`hyprctl` and socket2) – meeting detection and window lifecycle events
 
 ---
 
@@ -60,13 +61,13 @@ The application must start without showing any window. The only initial UI is a 
 - [ ] No window is created at startup
 - [ ] A tray icon (SVG or PNG, ≥22×22px) is visible in Waybar or another Hyprland SNI host
 - [ ] App does not crash if no SNI host is running (graceful fallback log)
-- [ ] Process is identifiable as `granola` in `ps aux`
+- [ ] Process is identifiable as `rustle` in `ps aux`
 
 #### Technical Notes
 
 - Use `ksni` crate for StatusNotifierItem DBus registration
-- Icon path resolved via XDG data dirs (`~/.local/share/granola/icons/`)
-- Log to `~/.local/share/granola/granola.log` using `tracing` + `tracing-subscriber`
+- Icon path resolved via XDG data dirs (`~/.local/share/rustle/icons/`)
+- Log path should resolve under `~/.local/share/rustle/` when file logging is introduced
 
 ---
 
@@ -82,20 +83,20 @@ The app must support enabling/disabling automatic startup on login via the XDG a
 
 #### Acceptance Criteria
 
-- [ ] Settings toggle "Start on login" creates `~/.config/autostart/granola.desktop` when enabled
+- [ ] Settings toggle "Start on login" creates `~/.config/autostart/rustle.desktop` when enabled
 - [ ] Toggling off removes the `.desktop` file
-- [ ] The `.desktop` file correctly uses `Exec=granola --tray` and `X-GNOME-Autostart-enabled=true`
-- [ ] A secondary option "Use systemd user service" installs/enables `~/.config/systemd/user/granola.service`
+- [ ] The `.desktop` file correctly uses `Exec=rustle --tray` and `X-GNOME-Autostart-enabled=true`
+- [ ] A secondary option "Use systemd user service" installs/enables `~/.config/systemd/user/rustle.service`
 - [ ] Both methods are mutually exclusive in settings
 
 #### Technical Notes
 
 ```ini
-# ~/.config/autostart/granola.desktop
+# ~/.config/autostart/rustle.desktop
 [Desktop Entry]
 Type=Application
-Name=Granola
-Exec=/usr/local/bin/granola --tray
+Name=Rustle
+Exec=/usr/local/bin/rustle --tray
 Hidden=false
 X-GNOME-Autostart-enabled=true
 ```
@@ -116,14 +117,14 @@ Right-clicking the tray icon opens a context menu with core actions.
 
 - [x] Menu contains: **Open Notes**, **Current Meeting** (greyed out if none), **Settings**, **Quit**
 - [ ] "Current Meeting" shows active meeting name when a Teams meeting is detected
-- [x] Left-click on tray icon opens the Notes window
+- [x] Left-click on tray icon opens the latest saved note, or the notes folder when no notes exist yet
 - [ ] Menu renders correctly under Hyprland (Waybar SNI support)
 - [ ] All menu items have keyboard-accessible mnemonics
 
 #### Menu Structure
 
-```
-[Granola Icon]
+```text
+[Rustle Icon]
 ├── 📋 Open Notes
 ├── 🎙 Current Meeting: <name or greyed "None">
 ├── ──────────────
@@ -176,7 +177,7 @@ When a meeting is detected (and the user has enabled auto-capture), the app capt
 
 - [ ] Captures audio from a configurable PipeWire/PulseAudio source (default: default input device)
 - [ ] Supports loopback capture (meeting audio output) via virtual sink if configured
-- [ ] Audio is buffered to a temp file in `~/.local/share/granola/recordings/`
+- [ ] Audio is buffered to a temp file in `~/.local/share/rustle/recordings/`
 - [ ] Capture starts automatically on `MeetingStarted` if `auto_capture = true` in settings
 - [ ] Capture can be manually started/stopped from tray menu
 - [ ] Recording indicator shown in tray icon (e.g. red dot overlay)
@@ -184,7 +185,7 @@ When a meeting is detected (and the user has enabled auto-capture), the app capt
 
 #### Technical Notes
 
-- Use `cpal` with PipeWire backend
+- Use `pw-record`, `parecord`, or `arecord` selected at runtime for Linux capture
 - Store as 16kHz mono WAV (optimal for Whisper transcription)
 - Chunk recordings into 10-minute segments for incremental transcription
 
@@ -200,14 +201,16 @@ When a meeting is detected (and the user has enabled auto-capture), the app capt
 
 Captured audio is transcribed to text, either locally via Whisper or via a remote API.
 
+Release scope note: for v0.1, `local` Whisper is the supported transcription path. The settings surface may still show `openai` so the planned support shape remains visible, but OpenAI transcription is not yet supported in the release build.
+
 #### Acceptance Criteria
 
 - [ ] Local transcription supported via `whisper-rs` (bundled `ggml` model)
-- [ ] Remote transcription supported via OpenAI Whisper API (requires API key in settings)
+- [ ] The `openai` transcription setting remains visible for future support, but selecting it must return a clear unsupported warning in v0.1
 - [ ] Transcription runs on audio chunks as they complete (streaming-style)
-- [ ] Transcription output stored as timestamped segments in SQLite
+- [ ] Transcription output stored as timestamped transcript draft files under `~/.local/share/rustle/transcripts/` in v0.1
 - [ ] Transcription method configurable: `local` | `openai`
-- [ ] Local model path configurable (default: `~/.local/share/granola/models/ggml-base.en.bin`)
+- [ ] Local model path configurable (default: `~/.local/share/rustle/models/ggml-base.en.bin`)
 - [ ] Errors during transcription logged and surfaced as tray notification; recording continues
 
 ---
@@ -222,14 +225,17 @@ Captured audio is transcribed to text, either locally via Whisper or via a remot
 
 Transcription text is passed to an LLM to produce structured meeting notes.
 
+Release scope note: for v0.1, `llama_cpp` is the primary supported provider and `ollama` remains an optional local endpoint path when validated in the target environment. `openai` and `anthropic` may remain visible in settings, but they are not yet supported in the release build and must fall back with a clear warning.
+
 #### Acceptance Criteria
 
 - [ ] Notes generated at end of meeting (or on demand mid-meeting)
 - [ ] Output includes: **Summary**, **Key Decisions**, **Action Items**, **Attendees** (if detectable)
 - [ ] AI provider configurable: `llama_cpp` (local llama.cpp) | `openai` (GPT-4o) | `anthropic` (Claude) | `ollama` (local)
 - [ ] System prompt configurable by user in settings
-- [ ] Notes saved as Markdown to `~/.local/share/granola/notes/YYYY-MM-DD_<meeting-name>.md`
-- [ ] Notes also stored in SQLite for search
+- [ ] Notes saved as Markdown to `~/.local/share/rustle/notes/YYYY-MM-DD_<meeting-name>.md`
+- [ ] Hosted `openai` and `anthropic` providers remain visible but unsupported in v0.1 and must fall back with a clear warning note
+- [ ] SQLite-backed note storage or search remains follow-on work after the file-backed v0.1 release
 
 ---
 
@@ -242,6 +248,8 @@ Transcription text is passed to an LLM to produce structured meeting notes.
 #### Description
 
 A native window for browsing, searching, and editing past meeting notes.
+
+Release scope note: v0.1 still opens note files or the notes directory through the user's editor or desktop opener. The native Wayland notes window described here remains follow-on work.
 
 #### Acceptance Criteria
 
@@ -268,12 +276,12 @@ A native window for browsing, searching, and editing past meeting notes.
 
 #### Description
 
-All user-configurable options are stored and editable via a settings window.
+All user-configurable options are stored persistently. In v0.1, the tray opens the TOML settings file in the user's editor; a native settings window remains follow-on work.
 
 #### Acceptance Criteria
 
-- [ ] Settings stored as TOML at `~/.config/granola/config.toml`
-- [ ] Settings window accessible from tray menu
+- [ ] Settings stored as TOML at `~/.config/rustle/config.toml`
+- [ ] Settings entry is accessible from the tray menu; in v0.1 it opens the TOML file in the configured editor
 - [ ] All settings have sensible defaults; app works out-of-the-box with no settings changes
 - [ ] Settings are validated on load; invalid values fall back to defaults with a warning log
 
@@ -297,19 +305,22 @@ chunk_duration_minutes = 10
 
 [transcription]
 method = "local"  # "local" | "openai"
-model_path = "~/.local/share/granola/models/ggml-base.en.bin"
+model_path = "~/.local/share/rustle/models/ggml-base.en.bin"
 openai_api_key = ""
 
 [ai]
-provider = "openai"  # "openai" | "anthropic" | "ollama"
-model = "gpt-4o"
+provider = "llama_cpp"  # "llama_cpp" | "openai" | "anthropic" | "ollama"
+model = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+model_path = ""
+hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 api_key = ""
 ollama_url = "http://localhost:11434"
-system_prompt = """You are a meeting notes assistant..."""
+system_prompt = """You are a meeting notes assistant. Produce concise, structured notes with a summary, key decisions, action items, and attendees when available."""
 
 [storage]
-notes_dir = "~/.local/share/granola/notes"
-db_path = "~/.local/share/granola/granola.db"
+notes_dir = "~/.local/share/rustle/notes"
+db_path = "~/.local/share/rustle/rustle.db"
 ```
 
 ---
@@ -327,7 +338,7 @@ The app sends desktop notifications for key events.
 #### Acceptance Criteria
 
 - [ ] Notification on meeting detected: "📅 Teams meeting detected – recording started"
-- [ ] Notification on meeting ended: "✅ Notes ready for <meeting name>"
+- [ ] Notification on meeting ended: "✅ Notes ready for the meeting"
 - [ ] Notification on transcription/AI error
 - [ ] Notifications sent via `notify-rust` (DBus `org.freedesktop.Notifications`)
 - [ ] Notifications respect system Do Not Disturb settings
@@ -350,7 +361,7 @@ Deep integration with Hyprland for window detection and workspace awareness.
 - [ ] Subscribes to Hyprland socket2 event stream for `openwindow`, `closewindow`, `windowtitle` events
 - [ ] Correctly resolves `$HYPRLAND_INSTANCE_SIGNATURE` at runtime
 - [ ] Handles Hyprland restart gracefully (reconnects to new socket)
-- [ ] Optional: auto-move Granola notes window to a specific workspace when a meeting starts (configurable)
+- [ ] Optional: auto-move the Rustle notes window to a specific workspace when a meeting starts (configurable)
 
 ---
 
