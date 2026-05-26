@@ -2,6 +2,7 @@
 
 mod autostart;
 mod diagnostics;
+mod notifications;
 
 use rustle_core::{is_hyprland_session, supported_session_label, AppEvent, EventBus, Settings};
 use tracing::{error, info, warn};
@@ -27,6 +28,11 @@ async fn main() -> anyhow::Result<()> {
     let event_bus = EventBus::new();
     let sender = event_bus.sender();
 
+    initialise_component(
+        "notifications",
+        notifications::initialise(Some(event_bus.subscribe())),
+    )
+    .await?;
     initialise_component(
         "tray",
         rustle_tray::initialise(sender.clone(), Some(event_bus.subscribe())),

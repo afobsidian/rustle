@@ -21,6 +21,17 @@ pub type EventReceiver = broadcast::Receiver<AppEvent>;
 /// Error returned when an application event cannot be published.
 pub type EventPublishError = Box<broadcast::error::SendError<AppEvent>>;
 
+/// Notification urgency used for desktop delivery.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NotificationUrgency {
+    /// Informational notification that can be delivered quietly.
+    Low,
+    /// Standard user-facing notification.
+    Normal,
+    /// Time-sensitive notification that highlights a failure.
+    Critical,
+}
+
 /// Application-wide event exchanged over the internal broadcast bus.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AppEvent {
@@ -95,6 +106,15 @@ pub enum AppEvent {
         meeting_id: Uuid,
         /// Filesystem path to the saved Markdown note.
         path: PathBuf,
+    },
+    /// A user-facing desktop notification should be delivered.
+    NotificationRequested {
+        /// Short notification title.
+        title: String,
+        /// Notification body text.
+        body: String,
+        /// Delivery urgency.
+        urgency: NotificationUrgency,
     },
     /// A persisted document should be deleted.
     DeleteDocumentRequested {

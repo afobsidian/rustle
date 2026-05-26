@@ -68,6 +68,8 @@ Rustle now honors the existing start-on-login settings on Linux. Set `general.st
 
 Rustle now writes structured diagnostics to stderr and to `~/.local/share/rustle/logs/rustle.log` by default. Unhandled panics are captured through a top-level panic hook so release-support triage has a stable log destination.
 
+Rustle also sends desktop notifications for meeting detection and recording start, saved notes, and user-visible transcription or summarisation fallbacks. If desktop notification delivery is unavailable, Rustle logs the failure and continues running.
+
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
 Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Rustle keeps polling Hyprland clients even when the event socket is temporarily unavailable, and reconnects to the socket automatically after Hyprland restarts so detection can recover without restarting the app. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.

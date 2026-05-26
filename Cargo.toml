@@ -37,6 +37,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+notify-rust = "4.11.7"
 rustle-ai = { path = "crates/rustle-ai", features = ["provider-llama-cpp"] }
 rustle-audio = { path = "crates/rustle-audio" }
 rustle-core = { path = "crates/rustle-core" }

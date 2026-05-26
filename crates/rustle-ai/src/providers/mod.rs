@@ -29,42 +29,50 @@ impl AiRuntime {
     ) -> SummarisationOutcome {
         match settings.ai.provider {
             AiProvider::LlamaCpp => match llama_cpp::summarise(settings, transcript).await {
-                Ok(markdown) => {
-                    SummarisationOutcome::Ready(builtin::notes_from_markdown(markdown, transcript))
-                }
+                Ok(markdown) => SummarisationOutcome::Ready {
+                    notes: builtin::notes_from_markdown(markdown, transcript),
+                    warning: None,
+                },
                 Err(error) => {
                     warn!(%error, "llama.cpp summarisation failed; writing transcript-only notes");
-                    SummarisationOutcome::Ready(builtin::summarise_with_reason(
-                        transcript,
-                        format!("llama.cpp summarisation unavailable: {error}"),
-                    ))
+                    let warning = format!("llama.cpp summarisation unavailable: {error}");
+                    SummarisationOutcome::Ready {
+                        notes: builtin::summarise_with_reason(transcript, &warning),
+                        warning: Some(warning),
+                    }
                 }
             },
             AiProvider::Ollama => match ollama::summarise(settings, transcript).await {
-                Ok(markdown) => {
-                    SummarisationOutcome::Ready(builtin::notes_from_markdown(markdown, transcript))
-                }
+                Ok(markdown) => SummarisationOutcome::Ready {
+                    notes: builtin::notes_from_markdown(markdown, transcript),
+                    warning: None,
+                },
                 Err(error) => {
                     warn!(%error, "ollama summarisation failed; writing transcript-only notes");
-                    SummarisationOutcome::Ready(builtin::summarise_with_reason(
-                        transcript,
-                        format!("Ollama summarisation unavailable: {error}"),
-                    ))
+                    let warning = format!("Ollama summarisation unavailable: {error}");
+                    SummarisationOutcome::Ready {
+                        notes: builtin::summarise_with_reason(transcript, &warning),
+                        warning: Some(warning),
+                    }
                 }
             },
             AiProvider::Openai | AiProvider::Anthropic => {
                 warn!(provider = ?settings.ai.provider, "hosted AI provider is not supported in v0.1");
-                SummarisationOutcome::Ready(builtin::summarise_with_reason(
-                    transcript,
-                    "The configured hosted AI provider is not supported in Rustle v0.1. Use llama.cpp or Ollama instead.",
-                ))
+                let warning = "The configured hosted AI provider is not supported in Rustle v0.1. Use llama.cpp or Ollama instead.".to_owned();
+                SummarisationOutcome::Ready {
+                    notes: builtin::summarise_with_reason(transcript, &warning),
+                    warning: Some(warning),
+                }
             }
         }
     }
 }
 
 pub(crate) enum SummarisationOutcome {
-    Ready(MeetingNotes),
+    Ready {
+        notes: MeetingNotes,
+        warning: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -125,9 +133,10 @@ mod tests {
             ..Settings::default()
         };
 
-        let SummarisationOutcome::Ready(notes) =
+        let SummarisationOutcome::Ready { notes, warning } =
             runtime.summarise(&settings, "Transcript content").await;
 
+        assert!(warning.is_some());
         assert!(notes.markdown.contains("not supported in Rustle v0.1"));
         assert!(notes.markdown.contains("llama.cpp or Ollama"));
     }

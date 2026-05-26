@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use rustle_core::{
     expand_tilde, resolve_transcripts_dir, safe_filename, tasks::spawn_logged, AppEvent, CoreError,
-    DetectionSource, EventReceiver, EventSender, Settings, TranscriptSegment, TranscriptionMethod,
+    DetectionSource, EventReceiver, EventSender, NotificationUrgency, Settings, TranscriptSegment,
+    TranscriptionMethod,
 };
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -20,6 +21,7 @@ const DEFAULT_WHISPER_MODEL_FILE: &str = "ggml-base.en.bin";
 const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
 
 struct MeetingTranscript {
+    name: String,
     path: PathBuf,
     segments: Vec<TranscriptSegment>,
     test_audio_path: Option<PathBuf>,
@@ -62,6 +64,7 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                         meetings.insert(
                             id,
                             MeetingTranscript {
+                                name: name.clone(),
                                 path: path.clone(),
                                 segments: Vec::new(),
                                 test_audio_path,
@@ -86,6 +89,12 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     Ok(segments) => segments,
                     Err(error) => {
                         warn!(%error, path = %path.display(), "failed to transcribe audio chunk");
+                        if let Some(meeting) = meetings.get(&meeting_id) {
+                            publish(
+                                &event_tx,
+                                transcription_failure_notification(&meeting.name, &error),
+                            );
+                        }
                         vec![recording_fallback_segment(&path, &error)]
                     }
                 };
@@ -111,7 +120,13 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 let mut segments = meeting.segments;
                 if segments.is_empty() {
                     if let Some(test_audio_path) = meeting.test_audio_path {
-                        segments = transcribe_test_audio(test_audio_path, settings.clone()).await;
+                        segments = transcribe_test_audio(
+                            &event_tx,
+                            &meeting.name,
+                            test_audio_path,
+                            settings.clone(),
+                        )
+                        .await;
                         if let Err(error) = append_segments(&meeting.path, &segments).await {
                             warn!(%error, path = %meeting.path.display(), "failed to append test audio transcript segments");
                         }
@@ -196,14 +211,33 @@ fn transcribe_audio_chunk_blocking(
     }
 }
 
-async fn transcribe_test_audio(path: PathBuf, settings: Settings) -> Vec<TranscriptSegment> {
+async fn transcribe_test_audio(
+    event_tx: &EventSender,
+    meeting_name: &str,
+    path: PathBuf,
+    settings: Settings,
+) -> Vec<TranscriptSegment> {
     info!(path = %path.display(), "transcribing test audio fixture");
     match transcribe_audio_chunk(path.clone(), settings).await {
         Ok(segments) => segments,
         Err(error) => {
             warn!(%error, path = %path.display(), "failed to transcribe test audio fixture");
+            publish(
+                event_tx,
+                transcription_failure_notification(meeting_name, &error),
+            );
             vec![recording_fallback_segment(&path, &error)]
         }
+    }
+}
+
+fn transcription_failure_notification(meeting_name: &str, error: &str) -> AppEvent {
+    AppEvent::NotificationRequested {
+        title: "Transcription issue".to_owned(),
+        body: format!(
+            "Rustle could not transcribe audio for {meeting_name}. The transcript draft remains available. {error}"
+        ),
+        urgency: NotificationUrgency::Critical,
     }
 }
 
@@ -658,5 +692,23 @@ mod tests {
 
         assert!(error.contains("not supported in Rustle v0.1"));
         assert!(error.contains("Local Whisper"));
+    }
+
+    #[test]
+    fn transcription_failure_notification_mentions_draft_availability() {
+        let AppEvent::NotificationRequested {
+            title,
+            body,
+            urgency,
+        } = transcription_failure_notification("Planning Sync", "missing model")
+        else {
+            panic!("expected notification event");
+        };
+
+        assert_eq!(title, "Transcription issue");
+        assert_eq!(urgency, NotificationUrgency::Critical);
+        assert!(body.contains("Planning Sync"));
+        assert!(body.contains("transcript draft remains available"));
+        assert!(body.contains("missing model"));
     }
 }

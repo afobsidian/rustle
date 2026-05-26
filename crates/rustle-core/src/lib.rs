@@ -11,7 +11,8 @@ pub mod types;
 pub use environment::{is_hyprland_session, supported_session_label};
 pub use errors::CoreError;
 pub use events::{
-    AppEvent, EventBus, EventPublishError, EventReceiver, EventSender, EVENT_BUS_CAPACITY,
+    AppEvent, EventBus, EventPublishError, EventReceiver, EventSender, NotificationUrgency,
+    EVENT_BUS_CAPACITY,
 };
 pub use paths::{
     default_data_dir, expand_tilde, is_safe_child, resolve_notes_dir, resolve_transcripts_dir,

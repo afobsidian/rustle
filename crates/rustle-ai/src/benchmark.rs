@@ -61,7 +61,7 @@ async fn benchmark_provider(model: &LlamaCppBenchmarkModel) -> ProviderBenchmark
     let generation_ms = generation_started.elapsed().as_millis();
 
     let (status, output_chars, preview) = match outcome {
-        Ok(SummarisationOutcome::Ready(notes)) => {
+        Ok(SummarisationOutcome::Ready { notes, .. }) => {
             let status = if notes.markdown.contains("## Warning") {
                 BenchmarkStatus::Fallback
             } else {
