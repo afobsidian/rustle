@@ -62,6 +62,8 @@ hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 
 Ollama remains available as an optional provider by setting `provider = "ollama"`. The settings surface also keeps `openai` and `anthropic` visible, but those hosted providers are not supported in v0.1 yet. If a hosted provider is selected, Rustle saves fallback notes with the reason instead of failing silently. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
 
+Rustle now honors the existing start-on-login settings on Linux. Set `general.start_on_login = true` and choose `general.start_on_login_method = "xdg"` to manage `~/.config/autostart/rustle.desktop`, or `"systemd"` to manage `~/.config/systemd/user/rustle.service` plus its `default.target.wants` symlink. Switching methods cleans up the stale integration path on the next launch.
+
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
 Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.

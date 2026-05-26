@@ -21,6 +21,12 @@ Rustle targets Hyprland and starts as a tray app when an SNI host is available. 
 
 Rustle opens notes, transcript drafts, and the settings file by preferring `$VISUAL`, then `$EDITOR`, then `xdg-open`.
 
+Rustle also reconciles start-on-login integration from `~/.config/rustle/config.toml` on startup:
+
+- `general.start_on_login = true` with `general.start_on_login_method = "xdg"` manages `~/.config/autostart/rustle.desktop`.
+- `general.start_on_login = true` with `general.start_on_login_method = "systemd"` manages `~/.config/systemd/user/rustle.service` and the matching `default.target.wants` symlink.
+- `general.start_on_login = false` removes both integration paths.
+
 The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available.
 
 Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.

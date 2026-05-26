@@ -1,5 +1,7 @@
 //! Rustle application entry point.
 
+mod autostart;
+
 use rustle_core::{is_hyprland_session, supported_session_label, AppEvent, EventBus, Settings};
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
@@ -8,7 +10,10 @@ use tracing_subscriber::{fmt, EnvFilter};
 async fn main() -> anyhow::Result<()> {
     install_tracing();
 
-    Settings::load().await?;
+    let settings = Settings::load().await?;
+    if let Err(error) = autostart::reconcile(&settings).await {
+        warn!(%error, "failed to reconcile start-on-login integration");
+    }
     warn_if_unsupported_session();
 
     let event_bus = EventBus::new();
