@@ -27,6 +27,8 @@ Rustle also reconciles start-on-login integration from `~/.config/rustle/config.
 - `general.start_on_login = true` with `general.start_on_login_method = "systemd"` manages `~/.config/systemd/user/rustle.service` and the matching `default.target.wants` symlink.
 - `general.start_on_login = false` removes both integration paths.
 
+Rustle writes structured diagnostics to stderr and to `~/.local/share/rustle/logs/rustle.log` by default. For release support, capture the relevant log excerpt from that file first; unhandled panics are also reported through the top-level panic hook with the log path in the emitted diagnostic context.
+
 The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available.
 
 Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.

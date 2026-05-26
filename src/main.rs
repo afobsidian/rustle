@@ -1,35 +1,104 @@
 //! Rustle application entry point.
 
 mod autostart;
+mod diagnostics;
 
 use rustle_core::{is_hyprland_session, supported_session_label, AppEvent, EventBus, Settings};
-use tracing::{info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    install_tracing();
+    let diagnostics = diagnostics::install();
+    info!(
+        subsystem = "diagnostics",
+        log_path = diagnostics
+            .log_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        "diagnostics initialised"
+    );
 
-    let settings = Settings::load().await?;
+    let settings = load_startup_settings().await?;
     if let Err(error) = autostart::reconcile(&settings).await {
-        warn!(%error, "failed to reconcile start-on-login integration");
+        warn!(subsystem = "autostart", %error, "failed to reconcile start-on-login integration");
     }
     warn_if_unsupported_session();
 
     let event_bus = EventBus::new();
     let sender = event_bus.sender();
 
-    rustle_tray::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
-    rustle_detection::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
-    rustle_audio::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
-    rustle_transcription::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
-    rustle_ai::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
-    rustle_storage::initialise(sender.clone(), Some(event_bus.subscribe())).await?;
-    rustle_ui::initialise(sender, Some(event_bus.subscribe())).await?;
+    initialise_component(
+        "tray",
+        rustle_tray::initialise(sender.clone(), Some(event_bus.subscribe())),
+    )
+    .await?;
+    initialise_component(
+        "detection",
+        rustle_detection::initialise(sender.clone(), Some(event_bus.subscribe())),
+    )
+    .await?;
+    initialise_component(
+        "audio",
+        rustle_audio::initialise(sender.clone(), Some(event_bus.subscribe())),
+    )
+    .await?;
+    initialise_component(
+        "transcription",
+        rustle_transcription::initialise(sender.clone(), Some(event_bus.subscribe())),
+    )
+    .await?;
+    initialise_component(
+        "ai",
+        rustle_ai::initialise(sender.clone(), Some(event_bus.subscribe())),
+    )
+    .await?;
+    initialise_component(
+        "storage",
+        rustle_storage::initialise(sender.clone(), Some(event_bus.subscribe())),
+    )
+    .await?;
+    initialise_component(
+        "ui",
+        rustle_ui::initialise(sender, Some(event_bus.subscribe())),
+    )
+    .await?;
 
     info!("rustle initialised");
     wait_for_shutdown(event_bus.subscribe()).await;
     Ok(())
+}
+
+async fn load_startup_settings() -> anyhow::Result<Settings> {
+    match Settings::load().await {
+        Ok(settings) => {
+            info!(subsystem = "settings", "startup settings loaded");
+            Ok(settings)
+        }
+        Err(error) => {
+            error!(subsystem = "settings", %error, "failed to load startup settings");
+            Err(error.into())
+        }
+    }
+}
+
+async fn initialise_component<T>(
+    component: &'static str,
+    future: impl std::future::Future<Output = Result<(), T>>,
+) -> Result<(), T>
+where
+    T: std::fmt::Display,
+{
+    info!(subsystem = component, "initialising subsystem");
+    match future.await {
+        Ok(()) => {
+            info!(subsystem = component, "subsystem initialised");
+            Ok(())
+        }
+        Err(error) => {
+            error!(subsystem = component, %error, "subsystem initialisation failed");
+            Err(error)
+        }
+    }
 }
 
 fn warn_if_unsupported_session() {
@@ -64,10 +133,4 @@ async fn wait_for_shutdown(mut receiver: rustle_core::EventReceiver) {
             }
         }
     }
-}
-
-fn install_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,whisper_rs=warn"));
-    fmt().with_env_filter(filter).init();
 }

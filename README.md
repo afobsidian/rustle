@@ -64,6 +64,8 @@ Ollama remains available as an optional provider by setting `provider = "ollama"
 
 Rustle now honors the existing start-on-login settings on Linux. Set `general.start_on_login = true` and choose `general.start_on_login_method = "xdg"` to manage `~/.config/autostart/rustle.desktop`, or `"systemd"` to manage `~/.config/systemd/user/rustle.service` plus its `default.target.wants` symlink. Switching methods cleans up the stale integration path on the next launch.
 
+Rustle now writes structured diagnostics to stderr and to `~/.local/share/rustle/logs/rustle.log` by default. Unhandled panics are captured through a top-level panic hook so release-support triage has a stable log destination.
+
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
 Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
