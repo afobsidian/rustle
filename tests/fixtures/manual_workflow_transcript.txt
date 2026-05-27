@@ -1,0 +1,3 @@
+Alice: We approved the Fedora release candidate.
+Morgan: I'll publish the smoke matrix tomorrow.
+Sam: Keep the Hyprland auto-detection path enabled for Teams only.

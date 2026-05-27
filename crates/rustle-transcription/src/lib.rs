@@ -217,6 +217,22 @@ async fn transcribe_test_audio(
     path: PathBuf,
     settings: Settings,
 ) -> Vec<TranscriptSegment> {
+    if fixture_is_transcript(&path) {
+        info!(path = %path.display(), "loading deterministic transcript fixture");
+        return match fs::read_to_string(&path).await {
+            Ok(transcript) => transcript_segments(transcript),
+            Err(error) => {
+                let error = format!("failed to read transcript fixture: {error}");
+                warn!(%error, path = %path.display(), "failed to load transcript fixture");
+                publish(
+                    event_tx,
+                    transcription_failure_notification(meeting_name, &error),
+                );
+                vec![recording_fallback_segment(&path, &error)]
+            }
+        };
+    }
+
     info!(path = %path.display(), "transcribing test audio fixture");
     match transcribe_audio_chunk(path.clone(), settings).await {
         Ok(segments) => segments,
@@ -388,6 +404,13 @@ fn download_default_whisper_model(destination: &Path) -> Result<PathBuf, String>
 
 fn is_default_transcription_model_path(configured_path: &str) -> bool {
     configured_path == Settings::default().transcription.model_path
+}
+
+fn fixture_is_transcript(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("txt" | "md")
+    )
 }
 
 fn test_audio_path_from_env() -> Option<PathBuf> {
@@ -661,6 +684,15 @@ mod tests {
         assert!(!is_default_transcription_model_path(
             "/tmp/custom-whisper-model.bin"
         ));
+    }
+
+    #[test]
+    fn spec_006_text_fixtures_are_treated_as_deterministic_transcripts() {
+        assert!(fixture_is_transcript(Path::new("/tmp/manual-workflow.txt")));
+        assert!(fixture_is_transcript(Path::new("/tmp/manual-workflow.md")));
+        assert!(!fixture_is_transcript(Path::new(
+            "/tmp/manual-workflow.wav"
+        )));
     }
 
     #[test]
