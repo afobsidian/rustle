@@ -34,6 +34,9 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "Rust-native desktop meeting notes app for Fedora Linux on Hyprland"
+repository = "https://github.com/afobsidian/rustle"
+homepage = "https://github.com/afobsidian/rustle"
 
 [dependencies]
 anyhow.workspace = true
@@ -52,3 +55,12 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 uuid.workspace = true
+
+[package.metadata.generate-rpm]
+summary = "Rust-native desktop meeting notes app for Fedora Linux on Hyprland"
+release = "1"
+assets = [
+    { source = "target/release/rustle", dest = "/usr/bin/rustle", mode = "755" },
+    { source = "assets/icons/rustle.svg", dest = "/usr/share/rustle/icons/rustle.svg", mode = "644" },
+    { source = "assets/icons/rustle-recording.svg", dest = "/usr/share/rustle/icons/rustle-recording.svg", mode = "644" },
+]

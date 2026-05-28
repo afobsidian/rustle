@@ -10,8 +10,11 @@ BENCH_TIMEOUT_SECS ?= 30
 BIN := rustle
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 HOST := $(shell rustc -vV | sed -n 's/^host: //p')
+RPM_RELEASE ?= 1
+RPM_ARCH := $(shell uname -m)
+RELEASE_BIN := $(TARGET_DIR)/release/$(BIN)
 
-.PHONY: help run bench-ai fmt lint test build install release-build dist ci clean
+.PHONY: help run bench-ai fmt lint test build install release-build dist rpm ci clean
 
 help:
 	@echo "Rustle DevOps targets:"
@@ -25,6 +28,7 @@ help:
 	@echo "  make install       Build and install the dev binary plus tray assets"
 	@echo "  make release-build Build optimized release binaries"
 	@echo "  make dist          Package the release binary and checksum"
+	@echo "  make rpm           Package an RPM and checksum"
 	@echo "  make ci            Run fmt, lint, test, and build"
 	@echo "  make clean         Remove build and distribution outputs"
 
@@ -54,14 +58,22 @@ install:
 	@echo "Installed $(BIN) to $(INSTALL_BIN_DIR)/$(BIN)"
 	@echo "Installed tray assets to $(INSTALL_DATA_DIR)/icons"
 
-release-build:
+$(RELEASE_BIN):
 	RUSTFLAGS="-D warnings" $(CARGO) build --workspace --release
 
-dist: release-build
+release-build: $(RELEASE_BIN)
+
+dist: $(RELEASE_BIN)
 	rm -rf "$(DIST_DIR)"
 	mkdir -p "$(DIST_DIR)"
 	tar -czf "$(DIST_DIR)/$(BIN)-$(VERSION)-$(HOST).tar.gz" -C "$(TARGET_DIR)/release" "$(BIN)"
 	sha256sum "$(DIST_DIR)/$(BIN)-$(VERSION)-$(HOST).tar.gz" > "$(DIST_DIR)/$(BIN)-$(VERSION)-$(HOST).tar.gz.sha256"
+
+rpm: $(RELEASE_BIN)
+	mkdir -p "$(DIST_DIR)"
+	rm -f "$(DIST_DIR)"/$(BIN)-*.rpm "$(DIST_DIR)"/$(BIN)-*.rpm.sha256
+	$(CARGO) generate-rpm -o "$(DIST_DIR)/$(BIN)-$(VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm"
+	sha256sum "$(DIST_DIR)/$(BIN)-$(VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm" > "$(DIST_DIR)/$(BIN)-$(VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm.sha256"
 
 ci: fmt lint test build
 

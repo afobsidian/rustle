@@ -41,12 +41,13 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
+          cargo install cargo-generate-rpm --locked
 
       - name: Validate release candidate
         run: make ci
 
       - name: Package artifacts
-        run: make dist
+        run: make dist rpm
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4.6.2
