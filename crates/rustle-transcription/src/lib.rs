@@ -743,4 +743,49 @@ mod tests {
         assert!(body.contains("transcript draft remains available"));
         assert!(body.contains("missing model"));
     }
+
+    #[tokio::test]
+    async fn spec_018_missing_transcript_fixture_returns_fallback_and_notification() {
+        let bus = rustle_core::EventBus::new();
+        let event_tx = bus.sender();
+        let mut observer = bus.subscribe();
+        let missing_path = std::env::temp_dir().join(format!(
+            "rustle-missing-transcript-fixture-{}.txt",
+            unix_timestamp_seconds()
+        ));
+
+        let segments = transcribe_test_audio(
+            &event_tx,
+            "Planning Sync",
+            missing_path.clone(),
+            Settings::default(),
+        )
+        .await;
+
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0]
+            .text
+            .contains("speech transcription was not available"));
+        assert!(segments[0]
+            .text
+            .contains(&missing_path.display().to_string()));
+        assert!(segments[0]
+            .text
+            .contains("failed to read transcript fixture"));
+
+        let AppEvent::NotificationRequested {
+            title,
+            body,
+            urgency,
+        } = observer.recv().await.expect("notification should publish")
+        else {
+            panic!("expected notification event");
+        };
+
+        assert_eq!(title, "Transcription issue");
+        assert_eq!(urgency, NotificationUrgency::Critical);
+        assert!(body.contains("Planning Sync"));
+        assert!(body.contains("transcript draft remains available"));
+        assert!(body.contains("failed to read transcript fixture"));
+    }
 }

@@ -161,4 +161,59 @@ mod tests {
         assert!(body.contains("fallback notes"));
         assert!(body.contains("timed out"));
     }
+
+    #[tokio::test]
+    async fn spec_018_fallback_summarisation_remains_observable() {
+        let bus = rustle_core::EventBus::new();
+        let event_tx = bus.sender();
+        let mut observer = bus.subscribe();
+        let mut runtime = AiRuntime;
+        let meeting_id = uuid::Uuid::new_v4();
+        let settings = Settings {
+            ai: rustle_core::AiSettings {
+                provider: rustle_core::AiProvider::Openai,
+                ..Settings::default().ai
+            },
+            ..Settings::default()
+        };
+
+        summarise(
+            &event_tx,
+            &mut runtime,
+            meeting_id,
+            "Planning Sync",
+            settings,
+            "Alex: Capture the fallback notes behavior.".to_owned(),
+        )
+        .await;
+
+        let warning = observer
+            .recv()
+            .await
+            .expect("fallback warning should publish");
+        let notes = observer
+            .recv()
+            .await
+            .expect("fallback notes should publish");
+
+        assert!(matches!(
+            warning,
+            AppEvent::NotificationRequested {
+                ref title,
+                ref body,
+                urgency: NotificationUrgency::Critical,
+            } if title == "Notes fallback saved"
+                && body.contains("Planning Sync")
+                && body.contains("not supported in Rustle v0.1")
+        ));
+        assert!(matches!(
+            notes,
+            AppEvent::SummarisationReady {
+                meeting_id: observed_id,
+                ref notes,
+            } if observed_id == meeting_id
+                && notes.markdown.contains("## Warning")
+                && notes.markdown.contains("llama.cpp or Ollama")
+        ));
+    }
 }

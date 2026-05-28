@@ -238,6 +238,7 @@ fn unix_timestamp_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn render_markdown_uses_existing_markdown() {
@@ -263,5 +264,79 @@ mod tests {
         assert_eq!(document.timestamp_seconds, 1_779_283_974);
         assert_eq!(document.title, "team sync");
         assert_eq!(document.kind, StoredDocumentKind::Note);
+    }
+
+    #[tokio::test]
+    async fn spec_018_save_notes_returns_write_errors() {
+        let sandbox = unique_sandbox("blocked-notes-dir");
+        let blocked_path = sandbox.join("notes-file");
+        tokio::fs::create_dir_all(&sandbox)
+            .await
+            .expect("sandbox should be created");
+        tokio::fs::write(&blocked_path, "not a directory")
+            .await
+            .expect("blocking file should exist");
+
+        let settings = Settings {
+            storage: rustle_core::StorageSettings {
+                notes_dir: blocked_path.display().to_string(),
+                ..Settings::default().storage
+            },
+            ..Settings::default()
+        };
+        let notes = MeetingNotes {
+            summary: "summary".to_owned(),
+            key_decisions: Vec::new(),
+            action_items: Vec::new(),
+            attendees: Vec::new(),
+            markdown: "# Existing".to_owned(),
+        };
+
+        let error = save_notes(&settings, "Planning Sync", &notes)
+            .await
+            .expect_err("blocking file should surface a write error");
+
+        assert!(!error.to_string().is_empty());
+        assert!(tokio::fs::try_exists(&blocked_path).await.unwrap_or(false));
+
+        let _ = tokio::fs::remove_dir_all(&sandbox).await;
+    }
+
+    #[tokio::test]
+    async fn spec_018_delete_document_rejects_paths_outside_notes_dir() {
+        let sandbox = unique_sandbox("delete-safety");
+        let notes_dir = sandbox.join("notes");
+        let outside_path = sandbox.join("outside.md");
+        tokio::fs::create_dir_all(&notes_dir)
+            .await
+            .expect("notes dir should be created");
+        tokio::fs::write(&outside_path, "notes")
+            .await
+            .expect("outside file should exist");
+
+        let settings = Settings {
+            storage: rustle_core::StorageSettings {
+                notes_dir: notes_dir.display().to_string(),
+                ..Settings::default().storage
+            },
+            ..Settings::default()
+        };
+
+        let error = delete_document(&settings, StoredDocumentKind::Note, &outside_path)
+            .await
+            .expect_err("outside file should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(tokio::fs::try_exists(&outside_path).await.unwrap_or(false));
+
+        let _ = tokio::fs::remove_dir_all(&sandbox).await;
+    }
+
+    fn unique_sandbox(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("rustle-storage-{test_name}-{unique}"))
     }
 }
