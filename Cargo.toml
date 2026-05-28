@@ -30,7 +30,7 @@ uuid = { version = "1.8.0", features = ["v4", "serde"] }
 
 [package]
 name = "rustle"
-version = "0.1.0"
+version = "0.0.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
