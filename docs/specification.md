@@ -12,34 +12,21 @@
 
 A Rust-native desktop application that sits in the system tray, automatically detects Microsoft Teams meetings, and provides AI-assisted note-taking during those meetings. Built for personal use on a Fedora Linux system running the Hyprland Wayland compositor.
 
-Release scope note: Rustle v0.1 is tray-first and file-backed. The supported paths today are the manual meeting workflow plus Hyprland-based Teams detection on Fedora/Hyprland, local Whisper transcription, `llama_cpp` as the default AI provider, and editor or desktop-opener based note, transcript, and settings access. Native notes/settings windows, desktop notifications, autostart integration, and SQLite-backed search remain follow-on work.
+Release scope note: Rustle v0.1 is tray-first and file-backed. The supported paths today are the manual meeting workflow plus Hyprland-based Teams detection on Fedora/Hyprland, local Whisper transcription, `llama_cpp` as the default AI provider, editor or desktop-opener based note/transcript/settings access, desktop notifications, start-on-login reconciliation, and structured logging. Native notes/settings windows and SQLite-backed search remain follow-on work.
 
 ---
 
 ## 2. Architecture Overview
 
-```text
-┌─────────────────────────────────────────────────┐
-│                    App Core                     │
-│  ┌─────────────┐  ┌──────────┐  ┌───────────┐  │
-│  │ Tray Manager│  │ Settings │  │ Note Store│  │
-│  └─────────────┘  └──────────┘  └───────────┘  │
-│  ┌─────────────┐  ┌──────────┐  ┌───────────┐  │
-│  │Meeting Detect│  │ AI Client│  │Audio Capt.│  │
-│  └─────────────┘  └──────────┘  └───────────┘  │
-└─────────────────────────────────────────────────┘
-```
+Rustle v0.1 uses a tray-first, event-driven architecture. The root binary initialises diagnostics, start-on-login reconciliation, and a shared `rustle-core` broadcast event bus, then wires the tray, detection, audio, transcription, AI, storage, and UI subsystems around that shared contract.
 
-**Key crates and runtime components (current v0.1):**
+See [docs/architecture.md](architecture.md) for the full software architecture reference, including:
 
-- `ksni` – StatusNotifierItem tray integration on Linux desktop environments with SNI support
-- `serde` / `serde_json` / `toml` – config serialisation and Hyprland JSON parsing
-- `tokio` – async runtime, process execution, Unix sockets, and task orchestration
-- `whisper-rs` – local Whisper transcription
-- `llama-cpp-2` – in-process local AI note generation
-- `tracing` / `tracing-subscriber` – diagnostics and logging
-- External recorder binaries (`pw-record`, `parecord`, `arecord`) – audio capture selected at runtime
-- Hyprland IPC (`hyprctl` and socket2) – meeting detection and window lifecycle events
+- startup order and long-lived subsystem loops
+- crate boundaries and responsibilities
+- the `AppEvent` bus contract
+- manual and Hyprland-driven meeting flows
+- file-backed persistence layout and external Linux integrations
 
 ---
 
@@ -67,7 +54,7 @@ The application must start without showing any window. The only initial UI is a 
 
 - Use `ksni` crate for StatusNotifierItem DBus registration
 - Icon path resolved via XDG data dirs (`~/.local/share/rustle/icons/`)
-- Log path should resolve under `~/.local/share/rustle/` when file logging is introduced
+- Log path resolves under `~/.local/share/rustle/`
 
 ---
 
@@ -83,11 +70,11 @@ The app must support enabling/disabling automatic startup on login via the XDG a
 
 #### Acceptance Criteria
 
-- [ ] Settings toggle "Start on login" creates `~/.config/autostart/rustle.desktop` when enabled
-- [ ] Toggling off removes the `.desktop` file
-- [ ] The `.desktop` file correctly uses `Exec=rustle --tray` and `X-GNOME-Autostart-enabled=true`
-- [ ] A secondary option "Use systemd user service" installs/enables `~/.config/systemd/user/rustle.service`
-- [ ] Both methods are mutually exclusive in settings
+- [x] `general.start_on_login = true` with `general.start_on_login_method = "xdg"` creates `~/.config/autostart/rustle.desktop`
+- [x] Disabling start-on-login removes the managed autostart artifacts
+- [x] The XDG desktop file includes `Type=Application`, `Exec=<current rustle executable>`, and `X-GNOME-Autostart-enabled=true`
+- [x] `general.start_on_login_method = "systemd"` writes `~/.config/systemd/user/rustle.service` and the matching `default.target.wants` symlink
+- [x] Switching methods removes stale artifacts from the other integration path
 
 #### Technical Notes
 
@@ -95,9 +82,11 @@ The app must support enabling/disabling automatic startup on login via the XDG a
 # ~/.config/autostart/rustle.desktop
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=Rustle
-Exec=/usr/local/bin/rustle --tray
-Hidden=false
+Comment=Tray-first meeting notes app
+Exec=/path/to/rustle
+Terminal=false
 X-GNOME-Autostart-enabled=true
 ```
 
@@ -337,10 +326,10 @@ The app sends desktop notifications for key events.
 
 #### Acceptance Criteria
 
-- [ ] Notification on meeting detected: "📅 Teams meeting detected – recording started"
-- [ ] Notification on meeting ended: "✅ Notes ready for the meeting"
-- [ ] Notification on transcription/AI error
-- [ ] Notifications sent via `notify-rust` (DBus `org.freedesktop.Notifications`)
+- [x] Notification on meeting detected or manually started
+- [x] Notification on recording start and saved notes
+- [x] Notification on transcription/AI error or fallback
+- [x] Notifications sent via `notify-rust` (DBus `org.freedesktop.Notifications`)
 - [ ] Notifications respect system Do Not Disturb settings
 - [ ] Each notification type can be individually disabled in settings
 
@@ -378,10 +367,90 @@ The app must not crash due to transient failures in external services.
 #### Acceptance Criteria
 
 - [ ] All external I/O (DBus, PipeWire, Hyprland IPC, API calls) wrapped in retry logic with exponential backoff
-- [ ] Panic handler installed via `std::panic::set_hook`; panics logged before process exits
+- [x] Panic handler installed via `std::panic::set_hook`; panics logged before process exits
 - [ ] If transcription fails, raw audio file preserved for manual retry
 - [ ] If AI summarisation fails, raw transcript preserved and note marked "summarisation pending"
-- [ ] Structured logging to file with `tracing`; log rotation after 10MB
+- [x] Structured logging to stderr and file with `tracing`
+- [ ] Log rotation after 10MB
+
+---
+
+### SPEC-017 · Hyprland Detection Resilience
+
+**ID:** SPEC-017  
+**Title:** Detection State Transitions  
+**Priority:** P1
+
+#### Description
+
+The supported Hyprland detection path must behave like a stable release contract: start a detected meeting once, keep the active title current, and recover when the Hyprland event socket disappears.
+
+#### Acceptance Criteria
+
+- [x] A newly detected Teams meeting publishes `MeetingStarted { source: Hyprland }` exactly once for the active Hyprland client address
+- [x] A title change for the same active client updates the in-memory meeting name without publishing a duplicate start event
+- [x] When the detected client disappears, Rustle publishes `MeetingEnded` for the active detected meeting
+- [x] Relevant socket events such as `windowtitle`, `windowtitlev2`, `activewindowv2`, and `closewindow` trigger a detection refresh
+- [x] Socket EOF or disconnect keeps polling available so detection can continue while reconnecting
+- [x] Reconnect delay uses bounded backoff rather than tight-loop retries
+
+#### Technical Notes
+
+- Hyprland detection combines `hyprctl clients` snapshots with socket2 event triggers
+- Polling remains the recovery path when the event listener is temporarily unavailable
+- Navigation-only Teams titles should remain filtered so they do not create false-positive meetings
+
+---
+
+### SPEC-018 · Observable Fallbacks and Persistence Safety
+
+**ID:** SPEC-018  
+**Title:** File-Backed Safety Nets  
+**Priority:** P1
+
+#### Description
+
+When Rustle cannot complete transcription, summarisation, or storage work normally, it must keep the file-backed workflow observable and safe instead of failing silently.
+
+#### Acceptance Criteria
+
+- [x] If deterministic transcript-fixture loading fails, Rustle emits a fallback transcript segment that explains the failure and where the fixture path pointed
+- [x] Transcription failures publish a critical user-visible notification that makes it clear the transcript draft remains available
+- [x] Unsupported or failing AI summarisation still produces fallback notes and a warning notification instead of dropping the meeting output
+- [x] Note-save failures surface the write error to the caller instead of returning success-shaped output
+- [x] Deletion requests outside the managed notes/transcripts directories are rejected with a permission error
+
+#### Technical Notes
+
+- The fallback note path is part of the current release behavior for unsupported hosted providers
+- Storage safety relies on canonical-path checks before deleting persisted documents
+- These protections are release-critical because v0.1 is intentionally file-backed
+
+---
+
+### SPEC-021 · Manual Workflow Release Contract
+
+**ID:** SPEC-021  
+**Title:** End-to-End Manual Workflow  
+**Priority:** P0
+
+#### Description
+
+The manual meeting flow is the must-pass release path. Starting and stopping a manual meeting must still produce a usable transcript and note outcome even when Rustle falls back from the preferred AI path.
+
+#### Acceptance Criteria
+
+- [x] `MeetingStarted { source: Manual }` creates a transcript draft under the Rustle transcripts data directory
+- [x] `MeetingEnded` for that meeting publishes a final transcription result based on recorded chunks, draft edits, or the configured deterministic test fixture
+- [x] The resulting notes are saved under the Rustle notes data directory
+- [x] When an unsupported AI provider is configured, Rustle still saves fallback notes and publishes a critical warning notification
+- [x] The transcript draft remains separate from the saved Markdown notes
+
+#### Technical Notes
+
+- The release-contract test uses `RUSTLE_TEST_AUDIO_FILE` with a transcript fixture to keep the end-to-end workflow deterministic
+- The event chain spans `rustle-transcription`, `rustle-ai`, and `rustle-storage`
+- This spec complements the manual smoke path in `docs/devops.md`
 
 ---
 
@@ -397,15 +466,18 @@ The app must not crash due to transient failures in external services.
 
 ## 5. Test Strategy
 
-| Spec     | Unit                       | Integration             | Manual                 |
-| -------- | -------------------------- | ----------------------- | ---------------------- |
-| SPEC-001 | Tray registration mock     | DBus roundtrip test     | Visual tray check      |
-| SPEC-002 | File write/delete          | Desktop file parse      | Login smoke test       |
-| SPEC-004 | Detection logic unit tests | Hyprland socket mock    | Live Teams call        |
-| SPEC-005 | Audio buffer chunking      | cpal device enumeration | Record + playback      |
-| SPEC-006 | Segment parsing            | Whisper model load      | Transcribe sample WAV  |
-| SPEC-007 | Prompt construction        | API mock                | Review generated notes |
-| SPEC-009 | TOML parse/validate        | Config round-trip       | Settings UI smoke      |
+| Spec     | Unit / crate-local coverage     | Integration / release-contract coverage | Manual                 |
+| -------- | ------------------------------- | --------------------------------------- | ---------------------- |
+| SPEC-001 | Tray registration mock          | DBus roundtrip test                      | Visual tray check      |
+| SPEC-002 | File write/delete               | Desktop file parse                       | Login smoke test       |
+| SPEC-004 | Detection logic unit tests      | Hyprland socket mock                     | Live Teams call        |
+| SPEC-005 | Audio buffer chunking           | Recorder process handling                | Record + playback      |
+| SPEC-006 | Segment parsing and model-path rules | Deterministic WAV / transcript-fixture flow | Transcribe sample WAV  |
+| SPEC-007 | Prompt construction and fallback-note shaping | Provider fallback contract           | Review generated notes |
+| SPEC-009 | TOML parse/validate             | Config round-trip                        | Settings UI smoke      |
+| SPEC-017 | Detection state transitions     | Socket reconnect / polling fallback      | Hyprland restart smoke |
+| SPEC-018 | Storage safety and fallback notifications | Cross-crate fallback persistence behavior | Failure-path review |
+| SPEC-021 | N/A                             | End-to-end manual workflow contract      | Manual release smoke   |
 
 ---
 
@@ -423,3 +495,5 @@ The app must not crash due to transient failures in external services.
 10. **SPEC-008** – Notes UI
 11. **SPEC-011** – Hyprland deep integration
 12. **SPEC-012** – Hardening pass
+
+Later release-contract specs such as **SPEC-017**, **SPEC-018**, and **SPEC-021** extend the original roadmap with hardening and end-to-end validation expectations for the current v0.1 architecture.

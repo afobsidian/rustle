@@ -2,6 +2,11 @@
 
 Rustle uses the repository `Makefile` as the single entry point for local and CI procedures.
 
+Related references:
+
+- [architecture.md](architecture.md) for runtime topology and crate boundaries
+- [specification.md](specification.md) for product and release-contract specs
+
 ## Local run
 
 Run the tray-first v0.1 workflow from the repository root:
@@ -170,6 +175,17 @@ Artifacts are written to `dist/` as:
 - `rustle-<version>-<host>.tar.gz`
 - `rustle-<version>-<host>.tar.gz.sha256`
 
+Create a release RPM and checksum:
+
+```sh
+make rpm
+```
+
+Artifacts are written to `dist/` as:
+
+- `rustle-<version>-1.<arch>.rpm`
+- `rustle-<version>-1.<arch>.rpm.sha256`
+
 ## Release-candidate checklist
 
 The release candidate should only pass when every required item below is green. Any failed item blocks the RC until it is fixed and re-run.
@@ -181,7 +197,8 @@ The release candidate should only pass when every required item below is green. 
 | Install layout | `make install` | Binary is executable at the install bin path and both tray icons exist under the install data path. | Build fails, binary is missing or not executable, or either icon is missing. |
 | Release binary | `make release-build` | `target/release/rustle` is produced successfully. | Release build fails or the optimized binary is missing. |
 | Tarball + checksum | `make dist` | `dist/rustle-<version>-<host>.tar.gz` and `.sha256` are created. | Packaging fails or either artifact is missing. |
-| Checksum verification | `sha256sum -c dist/*.sha256` | The generated tarball verifies as `OK`. | The checksum does not verify. |
+| RPM + checksum | `make rpm` | `dist/rustle-<version>-1.<arch>.rpm` and `.sha256` are created. | RPM packaging fails or either artifact is missing. |
+| Checksum verification | `sha256sum -c dist/*.sha256` | Every generated release artifact verifies as `OK`. | Any generated checksum does not verify. |
 
 ### Startup and post-install usability gate
 
@@ -208,6 +225,7 @@ DIST_DIR=dist \
 make install
 make release-build
 make dist
+make rpm
 sha256sum -c dist/*.sha256
 ```
 
@@ -215,9 +233,11 @@ Observed results from that run:
 
 - installed binary: `$sandbox/bin/rustle`
 - installed tray assets: `$sandbox/share/rustle/icons/rustle.svg`, `$sandbox/share/rustle/icons/rustle-recording.svg`
+- release RPM: `dist/rustle-0.1.0-1.x86_64.rpm`
+- RPM checksum file: `dist/rustle-0.1.0-1.x86_64.rpm.sha256`
 - release tarball: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz`
-- checksum file: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256`
-- checksum verification: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK`
+- tarball checksum file: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256`
+- checksum verification: `dist/rustle-0.1.0-1.x86_64.rpm: OK`, `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK`
 
 ## Pipelines
 
@@ -227,15 +247,19 @@ Observed results from that run:
 
 ### Release
 
-`.github/workflows/release.yml` runs for tags matching `v*.*.*` or manually with an existing tag. It validates the release candidate with `make ci`, packages the binary with `make dist`, uploads workflow artifacts, and publishes or updates a GitHub release.
+`.github/workflows/release.yml` runs for tags matching `v*.*.*` or manually with an existing tag. It validates the release candidate with `make ci`, packages the binary with `make dist` and `make rpm`, uploads workflow artifacts, and publishes or updates a GitHub release.
 
 ## Specification test traceability
 
-Tests should cite the relevant spec identifier from `docs/specification.md` in the test name. Current automated coverage focuses on implemented foundations:
+Tests should cite the relevant spec identifier from `docs/specification.md` in the test name. Current automated coverage includes both foundational specs and release-contract hardening:
 
-| Spec                           | Automated coverage                                                                                                                                 |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SPEC-009 · Persistent Settings | `crates/rustle-core/tests/spec_009_settings.rs` validates defaults, TOML round trips, invalid-value fallback, and owner-only settings permissions. |
-| SPEC-012 · Fault Tolerance     | `crates/rustle-core/tests/spec_012_event_bus.rs` validates event bus delivery and no-receiver error reporting.                                     |
+| Spec | Automated coverage |
+| ---- | ------------------ |
+| SPEC-006 · Audio Transcription | `crates/rustle-transcription/src/lib.rs` validates fixture handling, default model-path behavior, and unsupported OpenAI fallback messaging. |
+| SPEC-009 · Persistent Settings | `crates/rustle-core/tests/spec_009_settings.rs` validates defaults, TOML round trips, invalid-value fallback, legacy coercions, and owner-only settings permissions. |
+| SPEC-012 · Fault Tolerance | `crates/rustle-core/tests/spec_012_event_bus.rs` validates event bus delivery and no-receiver error reporting. |
+| SPEC-017 · Detection State Transitions | `crates/rustle-detection/src/lib.rs` validates start/end transitions, relevant socket event triggers, and polling fallback when the Hyprland socket closes. |
+| SPEC-018 · File-Backed Safety Nets | `crates/rustle-transcription/src/lib.rs`, `crates/rustle-ai/src/lib.rs`, and `crates/rustle-storage/src/lib.rs` validate observable fallbacks, persistence safety, and write/delete failure handling. |
+| SPEC-021 · End-to-End Manual Workflow | `tests/spec_021_manual_workflow.rs` validates the deterministic manual workflow across transcription, AI fallback, storage, and notifications. |
 
-Future feature work should add matching `spec_<id>_*.rs` tests with mocks for DBus, Hyprland IPC, PipeWire, transcription, AI, and storage behaviors described in `docs/specification.md`.
+Future feature work should add matching `spec_<id>_*.rs` tests or release-contract tests for new DBus, Hyprland IPC, PipeWire, transcription, AI, and storage behavior described in `docs/specification.md`.

@@ -2,9 +2,13 @@
 
 Rust-native desktop meeting notes app for Fedora Linux on Hyprland.
 
-## Specification
+## Documentation
 
-See [docs/specification.md](docs/specification.md) for the product and technical specification.
+| Document | Purpose |
+| -------- | ------- |
+| [docs/architecture.md](docs/architecture.md) | Code-aligned software architecture, crate boundaries, event flows, and runtime topology. |
+| [docs/specification.md](docs/specification.md) | Product specification plus implemented release-contract specs. |
+| [docs/devops.md](docs/devops.md) | Local run, validation, release, and smoke-test procedures. |
 
 ## Run Rustle
 
@@ -76,4 +80,4 @@ Hyprland-based Teams detection is implemented for the supported automatic workfl
 
 ## DevOps
 
-Use `make ci` to run the local validation gate. See [docs/devops.md](docs/devops.md) for test, build, release, and pipeline procedures, including the release-candidate checklist for `make install`, `make release-build`, `make dist`, checksum verification, post-install startup checks, and the Fedora/Hyprland smoke matrix.
+Use `make ci` to run the local validation gate. See [docs/devops.md](docs/devops.md) for test, build, release, and pipeline procedures, including the release-candidate checklist for `make install`, `make release-build`, `make dist`, `make rpm`, checksum verification, post-install startup checks, and the Fedora/Hyprland smoke matrix.
