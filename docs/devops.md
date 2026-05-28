@@ -92,6 +92,32 @@ Hyprland detection smoke test:
 6. Leave the meeting and confirm the active meeting state clears.
 7. Confirm desktop notifications appear for meeting start or detection, recording start, and saved notes. Force a transcription or summarisation fallback and confirm Rustle shows a failure notification without exiting.
 
+### Fedora + Hyprland smoke matrix
+
+Run the smoke matrix from a real Fedora Hyprland session. If you are working from a Distrobox container, launch the app and any desktop-facing helpers through `distrobox-host-exec` or `host-spawn` so Rustle reaches the host Hyprland socket, tray watcher, browser windows, and notification service.
+
+Host assumptions:
+
+- Hyprland session with an SNI host such as Waybar
+- Desktop notifications available (for example `swaync`)
+- At least one supported Hyprland client you can title like a Teams meeting window
+- A speech WAV fixture for the known-WAV row
+- Local Whisper model available at the configured path, or permission to download it on first use
+
+Record the current release-signoff run in this table:
+
+| Scenario | How to run | Pass criteria | Result | Notes |
+| -------- | ---------- | ------------- | ------ | ----- |
+| Tray startup | Launch Rustle in the host session. | Tray registers successfully and stays running. | `PASS` / `FAIL` / `BLOCKED` | Record missing watcher or icon issues. |
+| Manual meeting flow | Start a manual meeting, add transcript content, stop the meeting. | Transcript draft and Markdown notes are both created. | `PASS` / `FAIL` / `BLOCKED` | Note transcript and note paths. |
+| Transcript access | During an active meeting, use `transcript` and `open`. | Both open the current transcript draft. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path. |
+| Settings access | Use `settings`. | Rustle opens the settings file through `$VISUAL`, `$EDITOR`, or `xdg-open`. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path or failure. |
+| Notes access after stop | After a meeting ends, use `open`. | Rustle opens the latest saved note. | `PASS` / `FAIL` / `BLOCKED` | Record the opened note path. |
+| Notifications | Trigger meeting start/detection and saved-note events. | Notifications are delivered without crashing Rustle. | `PASS` / `FAIL` / `BLOCKED` | Record notification count or viewer evidence. |
+| Shutdown | Use `quit`. | Rustle exits cleanly. | `PASS` / `FAIL` / `BLOCKED` | Record any lingering-process issue. |
+| Hyprland auto-detection | Present a Hyprland client titled like a Teams meeting, then close it. | Rustle detects the meeting, creates a transcript draft, and clears the meeting when the window closes. | `PASS` / `FAIL` / `BLOCKED` | Record the client title used. |
+| Known-WAV transcription | Run with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`, then start and stop a manual meeting. | Rustle transcribes the WAV, writes the transcript draft, and saves notes. | `PASS` / `FAIL` / `BLOCKED` | Record the WAV path and a transcript excerpt. |
+
 ## Local validation
 
 Run the full validation gate before opening a pull request:

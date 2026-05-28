@@ -30,9 +30,10 @@ async fn notification_loop(mut event_rx: EventReceiver) {
             Ok(AppEvent::MeetingStarted { id, name, source }) => {
                 meeting_names.insert(id, name.clone());
                 dispatch_notification(
-                    &meeting_started_notification(&name, source),
+                    meeting_started_notification(&name, source),
                     deliver_notification,
-                );
+                )
+                .await;
             }
             Ok(AppEvent::RecordingStarted { meeting_id }) => {
                 let meeting_name = meeting_names
@@ -40,18 +41,20 @@ async fn notification_loop(mut event_rx: EventReceiver) {
                     .map(String::as_str)
                     .unwrap_or("Meeting");
                 dispatch_notification(
-                    &recording_started_notification(meeting_name),
+                    recording_started_notification(meeting_name),
                     deliver_notification,
-                );
+                )
+                .await;
             }
             Ok(AppEvent::NoteSaved { meeting_id, path }) => {
                 let meeting_name = meeting_names
                     .remove(&meeting_id)
                     .unwrap_or_else(|| "Meeting".to_owned());
                 dispatch_notification(
-                    &notes_ready_notification(&meeting_name, &path),
+                    notes_ready_notification(&meeting_name, &path),
                     deliver_notification,
-                );
+                )
+                .await;
             }
             Ok(AppEvent::NotificationRequested {
                 title,
@@ -59,13 +62,14 @@ async fn notification_loop(mut event_rx: EventReceiver) {
                 urgency,
             }) => {
                 dispatch_notification(
-                    &NotificationPayload {
+                    NotificationPayload {
                         title,
                         body,
                         urgency,
                     },
                     deliver_notification,
-                );
+                )
+                .await;
             }
             Ok(AppEvent::QuitRequested) => break,
             Ok(_) => {}
@@ -117,7 +121,22 @@ fn notes_ready_notification(meeting_name: &str, path: &Path) -> NotificationPayl
     }
 }
 
-fn dispatch_notification(
+async fn dispatch_notification(
+    payload: NotificationPayload,
+    deliver: impl FnOnce(&NotificationPayload) -> Result<(), String> + Send + 'static,
+) -> bool {
+    let title = payload.title.clone();
+
+    match tokio::task::spawn_blocking(move || dispatch_notification_sync(&payload, deliver)).await {
+        Ok(delivered) => delivered,
+        Err(error) => {
+            warn!(title = %title, %error, "desktop notification worker panicked");
+            false
+        }
+    }
+}
+
+fn dispatch_notification_sync(
     payload: &NotificationPayload,
     deliver: impl FnOnce(&NotificationPayload) -> Result<(), String>,
 ) -> bool {
@@ -180,7 +199,18 @@ mod tests {
     fn dispatch_notification_returns_false_when_delivery_fails() {
         let payload = recording_started_notification("Weekly Sync");
 
-        let delivered = dispatch_notification(&payload, |_| Err("dbus unavailable".to_owned()));
+        let delivered =
+            dispatch_notification_sync(&payload, |_| Err("dbus unavailable".to_owned()));
+
+        assert!(!delivered);
+    }
+
+    #[tokio::test]
+    async fn async_dispatch_notification_returns_false_when_delivery_fails() {
+        let payload = recording_started_notification("Weekly Sync");
+
+        let delivered =
+            dispatch_notification(payload, |_| Err("dbus unavailable".to_owned())).await;
 
         assert!(!delivered);
     }
