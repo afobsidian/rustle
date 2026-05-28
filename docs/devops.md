@@ -111,6 +111,22 @@ The gate runs:
 
 ## Release builds
 
+Validate install layout before cutting an RC:
+
+```sh
+make install
+```
+
+By default this installs:
+
+- `rustle` to `~/.local/bin/rustle`
+- tray icons to `~/.local/share/rustle/icons/`
+
+Rustle resolves tray icons from its default data directory first (`$XDG_DATA_HOME/rustle/icons`, or `~/.local/share/rustle/icons` when unset), then from shared data directories such as `/usr/local/share/rustle/icons` and `/usr/share/rustle/icons`. The installed icon names must remain:
+
+- `rustle.svg`
+- `rustle-recording.svg`
+
 Create an optimized binary locally:
 
 ```sh
@@ -127,6 +143,55 @@ Artifacts are written to `dist/` as:
 
 - `rustle-<version>-<host>.tar.gz`
 - `rustle-<version>-<host>.tar.gz.sha256`
+
+## Release-candidate checklist
+
+The release candidate should only pass when every required item below is green. Any failed item blocks the RC until it is fixed and re-run.
+
+### Packaging gate
+
+| Check | Command | Pass criteria | Fail criteria |
+| ----- | ------- | ------------- | ------------- |
+| Install layout | `make install` | Binary is executable at the install bin path and both tray icons exist under the install data path. | Build fails, binary is missing or not executable, or either icon is missing. |
+| Release binary | `make release-build` | `target/release/rustle` is produced successfully. | Release build fails or the optimized binary is missing. |
+| Tarball + checksum | `make dist` | `dist/rustle-<version>-<host>.tar.gz` and `.sha256` are created. | Packaging fails or either artifact is missing. |
+| Checksum verification | `sha256sum -c dist/*.sha256` | The generated tarball verifies as `OK`. | The checksum does not verify. |
+
+### Startup and post-install usability gate
+
+Run these checks from a Fedora Linux session on Hyprland with an SNI host such as Waybar using the installed binary, not `cargo run`.
+
+| Check | How to validate | Pass criteria | Fail criteria |
+| ----- | --------------- | ------------- | ------------- |
+| Tray startup | Launch the installed `rustle` binary. | Rustle starts, stays running, and the tray icon resolves from the installed icon directory. | Startup crashes, exits unexpectedly, or shows a missing icon. |
+| Manual workflow | Start a manual meeting, then stop it after transcript content is available. | Transcript draft and saved Markdown notes are created successfully. | Manual start/stop fails or no transcript/note output is created. |
+| Settings access | Use the tray or terminal fallback `settings` command. | The settings file opens via `$VISUAL`, `$EDITOR`, or `xdg-open`. | Settings cannot be opened. |
+| Notes and transcript access | Use `open` and `transcript` during and after a meeting. | Active transcript opens during the meeting; latest note opens after stop. | Wrong target opens or the command fails. |
+| Notifications | Trigger meeting start, saved-note, and fallback notifications. | User-visible notifications appear when available; delivery failures are logged without crashing Rustle. | Notifications crash the app or expected user-visible fallbacks are silent. |
+
+### Validated RC preparation flow
+
+The current release-candidate packaging flow was exercised locally with sandboxed install paths to avoid mutating the host environment:
+
+```sh
+sandbox="$(mktemp -d)"
+INSTALL_BIN_DIR="$sandbox/bin" \
+INSTALL_DATA_HOME="$sandbox/share" \
+TARGET_DIR=target \
+DIST_DIR=dist \
+make install
+make release-build
+make dist
+sha256sum -c dist/*.sha256
+```
+
+Observed results from that run:
+
+- installed binary: `$sandbox/bin/rustle`
+- installed tray assets: `$sandbox/share/rustle/icons/rustle.svg`, `$sandbox/share/rustle/icons/rustle-recording.svg`
+- release tarball: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz`
+- checksum file: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256`
+- checksum verification: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK`
 
 ## Pipelines
 
