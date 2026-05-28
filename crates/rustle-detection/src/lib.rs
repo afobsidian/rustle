@@ -226,6 +226,14 @@ async fn reconcile_detected_meeting(
         }
     };
 
+    apply_detected_candidate(event_tx, active_meeting, candidate);
+}
+
+fn apply_detected_candidate(
+    event_tx: &EventSender,
+    active_meeting: &mut Option<DetectedMeeting>,
+    candidate: Option<MeetingCandidate>,
+) {
     match (active_meeting.as_mut(), candidate) {
         (None, Some(candidate)) => {
             let meeting = DetectedMeeting {
@@ -586,6 +594,8 @@ const fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::broadcast::error::TryRecvError;
 
     fn client(address: &str, class_name: &str, title: &str) -> HyprlandClient {
         HyprlandClient {
@@ -749,6 +759,104 @@ mod tests {
         assert_eq!(
             next_reconnect_delay(HYPRLAND_MAX_RECONNECT_DELAY),
             HYPRLAND_MAX_RECONNECT_DELAY
+        );
+    }
+
+    #[test]
+    fn spec_017_release_contract_covers_detection_state_transitions() {
+        let bus = rustle_core::EventBus::new();
+        let event_tx = bus.sender();
+        let mut observer = bus.subscribe();
+        let mut active_meeting = None;
+
+        apply_detected_candidate(
+            &event_tx,
+            &mut active_meeting,
+            Some(MeetingCandidate {
+                address: "0xabc".to_owned(),
+                name: "Roadmap Review".to_owned(),
+                score: 2,
+            }),
+        );
+
+        let started = observer.try_recv().expect("meeting start should publish");
+        let started_id = match started {
+            AppEvent::MeetingStarted { id, name, source } => {
+                assert_eq!(name, "Roadmap Review");
+                assert_eq!(source, DetectionSource::Hyprland);
+                id
+            }
+            other => panic!("expected MeetingStarted event, got {other:?}"),
+        };
+
+        apply_detected_candidate(
+            &event_tx,
+            &mut active_meeting,
+            Some(MeetingCandidate {
+                address: "0xabc".to_owned(),
+                name: "Roadmap Review (Renamed)".to_owned(),
+                score: 2,
+            }),
+        );
+
+        assert_eq!(
+            active_meeting.as_ref().map(|meeting| meeting.name.as_str()),
+            Some("Roadmap Review (Renamed)")
+        );
+        assert!(matches!(observer.try_recv(), Err(TryRecvError::Empty)));
+
+        apply_detected_candidate(&event_tx, &mut active_meeting, None);
+
+        let ended = observer.try_recv().expect("meeting end should publish");
+        assert!(matches!(
+            ended,
+            AppEvent::MeetingEnded { id } if id == started_id
+        ));
+        assert!(active_meeting.is_none());
+    }
+
+    #[tokio::test]
+    async fn spec_017_relevant_socket_events_trigger_candidate_refreshes() {
+        let (stream, mut writer) = UnixStream::pair().expect("socket pair should open");
+        let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
+
+        let reader = tokio::spawn(async move { read_hyprland_events(stream, &trigger_tx).await });
+
+        writer
+            .write_all(
+                b"workspace>>1\nwindowtitle>>Planning Sync\nactivewindowv2>>0xabc\nclosewindow>>0xabc\n",
+            )
+            .await
+            .expect("socket payload should write");
+        writer.shutdown().await.expect("socket should close");
+
+        assert!(
+            !reader.await.expect("socket reader should join"),
+            "socket EOF should fall back to polling"
+        );
+        assert!(trigger_rx.recv().await.is_some());
+        assert!(trigger_rx.recv().await.is_some());
+        assert!(trigger_rx.recv().await.is_some());
+        assert!(trigger_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn spec_017_socket_close_keeps_polling_available() {
+        let (stream, mut writer) = UnixStream::pair().expect("socket pair should open");
+        let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
+
+        let reader = tokio::spawn(async move { read_hyprland_events(stream, &trigger_tx).await });
+
+        writer
+            .write_all(b"windowtitlev2>>Sprint Planning\n")
+            .await
+            .expect("socket payload should write");
+        writer.shutdown().await.expect("socket should close");
+
+        assert!(trigger_rx.recv().await.is_some());
+        assert!(
+            !reader.await.expect("socket reader should join"),
+            "closed socket should keep the listener in polling mode"
         );
     }
 }
