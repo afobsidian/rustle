@@ -40,7 +40,7 @@ Recorder startup and shutdown are now bounded for release reliability. If a sele
 
 To test transcription with a known WAV instead of the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting.
 
-Rustle opens notes, transcript drafts, and the settings file by preferring `$VISUAL`, then `$EDITOR`, then `xdg-open`. This keeps editing predictable while the app remains tray-first.
+Rustle opens notes, transcript drafts, and the settings file through `xdg-open` first so the desktop's normal editor association is used, then falls back to `$VISUAL` or `$EDITOR` if needed.
 
 Local transcription uses `whisper-rs` and reads the model configured by `transcription.model_path`. When the default model path is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing:
 

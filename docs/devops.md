@@ -24,7 +24,7 @@ Rustle targets Hyprland and starts as a tray app when an SNI host is available. 
 - `settings`: Opens the TOML settings file in the configured editor.
 - `quit`: Requests graceful application shutdown.
 
-Rustle opens notes, transcript drafts, and the settings file by preferring `$VISUAL`, then `$EDITOR`, then `xdg-open`.
+Rustle opens notes, transcript drafts, and the settings file through `xdg-open` first so the desktop's normal editor association is used, then falls back to `$VISUAL` or `$EDITOR` if needed.
 
 Rustle also reconciles start-on-login integration from `~/.config/rustle/config.toml` on startup:
 
@@ -116,7 +116,7 @@ Record the current release-signoff run in this table:
 | Tray startup | Launch Rustle in the host session. | Tray registers successfully and stays running. | `PASS` / `FAIL` / `BLOCKED` | Record missing watcher or icon issues. |
 | Manual meeting flow | Start a manual meeting, add transcript content, stop the meeting. | Transcript draft and Markdown notes are both created. | `PASS` / `FAIL` / `BLOCKED` | Note transcript and note paths. |
 | Transcript access | During an active meeting, use `transcript` and `open`. | Both open the current transcript draft. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path. |
-| Settings access | Use `settings`. | Rustle opens the settings file through `$VISUAL`, `$EDITOR`, or `xdg-open`. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path or failure. |
+| Settings access | Use `settings`. | Rustle opens the settings file through the desktop opener, or falls back to `$VISUAL` / `$EDITOR` when needed. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path or failure. |
 | Notes access after stop | After a meeting ends, use `open`. | Rustle opens the latest saved note. | `PASS` / `FAIL` / `BLOCKED` | Record the opened note path. |
 | Notifications | Trigger meeting start/detection and saved-note events. | Notifications are delivered without crashing Rustle. | `PASS` / `FAIL` / `BLOCKED` | Record notification count or viewer evidence. |
 | Shutdown | Use `quit`. | Rustle exits cleanly. | `PASS` / `FAIL` / `BLOCKED` | Record any lingering-process issue. |
@@ -208,7 +208,7 @@ Run these checks from a Fedora Linux session on Hyprland with an SNI host such a
 | ----- | --------------- | ------------- | ------------- |
 | Tray startup | Launch the installed `rustle` binary. | Rustle starts, stays running, and the tray icon resolves from the installed icon directory. | Startup crashes, exits unexpectedly, or shows a missing icon. |
 | Manual workflow | Start a manual meeting, then stop it after transcript content is available. | Transcript draft and saved Markdown notes are created successfully. | Manual start/stop fails or no transcript/note output is created. |
-| Settings access | Use the tray or terminal fallback `settings` command. | The settings file opens via `$VISUAL`, `$EDITOR`, or `xdg-open`. | Settings cannot be opened. |
+| Settings access | Use the tray or terminal fallback `settings` command. | The settings file opens via the desktop opener, or falls back to `$VISUAL` / `$EDITOR` when needed. | Settings cannot be opened. |
 | Notes and transcript access | Use `open` and `transcript` during and after a meeting. | Active transcript opens during the meeting; latest note opens after stop. | Wrong target opens or the command fails. |
 | Notifications | Trigger meeting start, saved-note, and fallback notifications. | User-visible notifications appear when available; delivery failures are logged without crashing Rustle. | Notifications crash the app or expected user-visible fallbacks are silent. |
 

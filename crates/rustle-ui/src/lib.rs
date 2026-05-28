@@ -176,17 +176,34 @@ async fn open_path(path: &Path, prefer_editor: bool, purpose: &'static str) {
 }
 
 async fn launch_path(path: &Path, prefer_editor: bool) -> std::io::Result<()> {
-    if prefer_editor {
-        if let Some(command_line) = preferred_editor_command(path)? {
-            return spawn_command(command_line).await;
+    let candidates = open_command_candidates(path, prefer_editor)?;
+    let mut last_error = None;
+
+    for command_line in candidates {
+        match spawn_command(command_line).await {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
         }
     }
 
-    spawn_command(CommandLine {
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::other(format!("no opener is available for {}", path.display()))
+    }))
+}
+
+fn open_command_candidates(path: &Path, prefer_editor: bool) -> std::io::Result<Vec<CommandLine>> {
+    let mut commands = vec![CommandLine {
         program: OsString::from("xdg-open"),
         args: vec![path.as_os_str().to_owned()],
-    })
-    .await
+    }];
+
+    if prefer_editor {
+        if let Some(command) = preferred_editor_command(path)? {
+            commands.push(command);
+        }
+    }
+
+    Ok(commands)
 }
 
 fn preferred_editor_command(path: &Path) -> std::io::Result<Option<CommandLine>> {
@@ -222,7 +239,16 @@ fn preferred_editor_command(path: &Path) -> std::io::Result<Option<CommandLine>>
 async fn spawn_command(command_line: CommandLine) -> std::io::Result<()> {
     let mut command = Command::new(&command_line.program);
     command.args(&command_line.args);
-    command.spawn()?.wait().await.map(|_| ())
+    let status = command.spawn()?.wait().await?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "{} exited with status {status}",
+            command_line.program.to_string_lossy()
+        )))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -234,7 +260,8 @@ struct CommandLine {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_settings_file_at, preferred_editor_command, select_notes_open_target, CommandLine,
+        ensure_settings_file_at, open_command_candidates, preferred_editor_command,
+        select_notes_open_target, CommandLine,
     };
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -288,6 +315,40 @@ mod tests {
                 program: OsString::from("nvim"),
                 args: vec![OsString::from("-f"), OsString::from("/tmp/test.md")],
             }
+        );
+
+        match original_visual {
+            Some(value) => std::env::set_var("VISUAL", value),
+            None => std::env::remove_var("VISUAL"),
+        }
+        match original_editor {
+            Some(value) => std::env::set_var("EDITOR", value),
+            None => std::env::remove_var("EDITOR"),
+        }
+    }
+
+    #[test]
+    fn open_commands_prefer_xdg_open_before_terminal_editor() {
+        let original_visual = std::env::var_os("VISUAL");
+        let original_editor = std::env::var_os("EDITOR");
+        std::env::set_var("VISUAL", "nvim -f");
+        std::env::set_var("EDITOR", "nano");
+
+        let commands =
+            open_command_candidates(Path::new("/tmp/test.md"), true).expect("commands exist");
+
+        assert_eq!(
+            commands,
+            vec![
+                CommandLine {
+                    program: OsString::from("xdg-open"),
+                    args: vec![OsString::from("/tmp/test.md")],
+                },
+                CommandLine {
+                    program: OsString::from("nvim"),
+                    args: vec![OsString::from("-f"), OsString::from("/tmp/test.md")],
+                },
+            ]
         );
 
         match original_visual {

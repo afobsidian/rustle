@@ -90,7 +90,7 @@ pub enum AppEvent {
     OpenPathRequested {
         /// Filesystem path to open.
         path: PathBuf,
-        /// Whether the user's preferred editor should be used before `xdg-open`.
+        /// Whether file-oriented fallbacks such as `$VISUAL` or `$EDITOR` should be tried after `xdg-open`.
         prefer_editor: bool,
     },
     /// A manual transcript draft has been created for a meeting.

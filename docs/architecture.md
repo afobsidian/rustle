@@ -72,7 +72,7 @@ Each subsystem usually spawns its own long-lived async loop with `rustle_core::t
 | `rustle-transcription` | Transcript draft creation and local Whisper transcription for chunk outputs or deterministic test fixtures. | `whisper-rs`, transcript draft files, optional `RUSTLE_TEST_AUDIO_FILE`. |
 | `rustle-ai` | Transcript-to-notes summarisation and fallback note generation. | `llama-cpp-2`, optional Ollama, explicit unsupported hosted-provider fallbacks. |
 | `rustle-storage` | Saving notes, listing notes/transcripts, and safe deletion inside managed directories. | Markdown note files, transcript files, XDG data paths. |
-| `rustle-ui` | Opening notes, transcript drafts, and settings through `$VISUAL`, `$EDITOR`, or `xdg-open`. | Desktop opener/editor process spawning. |
+| `rustle-ui` | Opening notes, transcript drafts, and settings through `xdg-open`, with `$VISUAL` or `$EDITOR` as fallbacks. | Desktop opener/editor process spawning. |
 | `src/notifications.rs` | Desktop notification delivery for major workflow events and user-visible fallbacks. | `notify-rust`, freedesktop notifications DBus service. |
 | `src/autostart.rs` | Reconciles XDG autostart or systemd user-service startup artifacts from settings. | `~/.config/autostart`, `~/.config/systemd/user`. |
 | `src/diagnostics.rs` | Structured logging to stderr and file plus top-level panic capture. | `tracing`, `tracing-subscriber`, `~/.local/share/rustle/logs/rustle.log`. |
