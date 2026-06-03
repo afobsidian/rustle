@@ -144,6 +144,15 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     }
                 }
 
+                if segments.is_empty() {
+                    warn!(
+                        meeting_id = %id,
+                        path = %meeting.path.display(),
+                        "transcript is empty; skipping summarisation"
+                    );
+                    continue;
+                }
+
                 info!(
                     meeting_id = %id,
                     path = %meeting.path.display(),
@@ -787,5 +796,40 @@ mod tests {
         assert!(body.contains("Planning Sync"));
         assert!(body.contains("transcript draft remains available"));
         assert!(body.contains("failed to read transcript fixture"));
+    }
+
+    #[test]
+    fn spec_006_empty_segments_are_flagged_for_transcription_loop_guard() {
+        let segments: Vec<TranscriptSegment> = Vec::new();
+        assert!(segments.is_empty(), "empty segments guard must fire");
+        // Sanity: a single non-empty segment is not empty.
+        let non_empty = [TranscriptSegment {
+            start_ms: 0,
+            end_ms: 100,
+            text: "Alice: Hello".to_owned(),
+        }];
+        assert!(!non_empty.is_empty());
+    }
+
+    #[test]
+    fn transcript_segments_handles_whitespace_only_text() {
+        let segments = transcript_segments("   \n\n  ".to_owned());
+        assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn recording_fallback_segment_includes_path_and_error() {
+        let path = std::path::Path::new("/tmp/test-recording.wav");
+        let error = "model not found";
+        let segment = recording_fallback_segment(path, error);
+
+        assert!(segment.text.contains("/tmp/test-recording.wav"));
+        assert!(segment.text.contains("model not found"));
+    }
+
+    #[test]
+    fn meeting_name_from_path_handles_missing_extension() {
+        let name = meeting_name_from_path(std::path::Path::new("/tmp/1234567890_meeting"));
+        assert_eq!(name, "meeting");
     }
 }

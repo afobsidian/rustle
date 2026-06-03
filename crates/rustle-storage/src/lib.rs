@@ -339,4 +339,34 @@ mod tests {
             .as_nanos();
         std::env::temp_dir().join(format!("rustle-storage-{test_name}-{unique}"))
     }
+
+    #[test]
+    fn render_markdown_generates_structure_when_markdown_is_empty() {
+        let notes = MeetingNotes {
+            summary: "We discussed the roadmap.".to_owned(),
+            key_decisions: Vec::new(),
+            action_items: Vec::new(),
+            attendees: Vec::new(),
+            markdown: String::new(),
+        };
+
+        let rendered = render_markdown(&notes);
+        assert!(rendered.contains("# Meeting Notes"));
+        assert!(rendered.contains("## Summary"));
+        assert!(rendered.contains("We discussed the roadmap."));
+    }
+
+    #[test]
+    fn parse_document_returns_none_for_invalid_filename() {
+        let result = parse_document(
+            PathBuf::from("/"),
+            StoredDocumentKind::Note,
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn humanise_title_converts_underscores_to_spaces() {
+        assert_eq!(humanise_title("team_sync"), "team sync");
+    }
 }
