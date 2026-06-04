@@ -47,6 +47,10 @@ async fn summarisation_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 }) => {
                     let settings = load_settings("AI summarisation").await;
                     let transcript = transcript_text(&segments);
+                    if transcript.trim().is_empty() {
+                        warn!(meeting_id = %meeting_id, "skipping summarisation for empty transcript");
+                        continue;
+                    }
                     let meeting_name = meeting_names
                         .get(&meeting_id)
                         .cloned()
@@ -215,5 +219,12 @@ mod tests {
                 && notes.markdown.contains("## Warning")
                 && notes.markdown.contains("llama.cpp or Ollama")
         ));
+    }
+
+    #[test]
+    fn empty_segments_produce_empty_transcript_text() {
+        let segments: Vec<TranscriptSegment> = Vec::new();
+        let text = transcript_text(&segments);
+        assert!(text.trim().is_empty());
     }
 }

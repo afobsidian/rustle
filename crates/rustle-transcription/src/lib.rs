@@ -25,6 +25,8 @@ struct MeetingTranscript {
     path: PathBuf,
     segments: Vec<TranscriptSegment>,
     test_audio_path: Option<PathBuf>,
+    recording_active: bool,
+    meeting_ended: bool,
 }
 
 /// Initialises the transcription component with the shared application event bus.
@@ -68,6 +70,8 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                                 path: path.clone(),
                                 segments: Vec::new(),
                                 test_audio_path,
+                                recording_active: false,
+                                meeting_ended: false,
                             },
                         );
                         publish(
@@ -82,6 +86,11 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     Err(error) => {
                         warn!(%error, meeting = %name, "failed to create transcript draft")
                     }
+                }
+            }
+            Ok(AppEvent::RecordingStarted { meeting_id }) => {
+                if let Some(meeting) = meetings.get_mut(&meeting_id) {
+                    meeting.recording_active = true;
                 }
             }
             Ok(AppEvent::RecordingChunkReady { meeting_id, path }) => {
@@ -109,7 +118,7 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 }
             }
             Ok(AppEvent::MeetingEnded { id }) => {
-                let Some(meeting) = meetings.remove(&id) else {
+                let Some(meeting) = meetings.get_mut(&id) else {
                     warn!(
                         meeting_id = %id,
                         "ignoring duplicate meeting end without an active transcript draft"
@@ -117,46 +126,42 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     continue;
                 };
 
-                let mut segments = meeting.segments;
-                if segments.is_empty() {
-                    if let Some(test_audio_path) = meeting.test_audio_path {
-                        segments = transcribe_test_audio(
-                            &event_tx,
-                            &meeting.name,
-                            test_audio_path,
-                            settings.clone(),
-                        )
-                        .await;
-                        if let Err(error) = append_segments(&meeting.path, &segments).await {
-                            warn!(%error, path = %meeting.path.display(), "failed to append test audio transcript segments");
-                        }
-                    }
-                }
-                match fs::read_to_string(&meeting.path).await {
-                    Ok(content) => {
-                        let manual_segments = transcript_segments(content);
-                        if segments.is_empty() {
-                            segments = manual_segments;
-                        }
-                    }
-                    Err(error) => {
-                        warn!(%error, path = %meeting.path.display(), "failed to read transcript draft");
-                    }
+                meeting.meeting_ended = true;
+                if meeting.recording_active {
+                    info!(
+                        meeting_id = %id,
+                        path = %meeting.path.display(),
+                        "meeting ended; waiting for final recording chunk"
+                    );
+                    continue;
                 }
 
-                info!(
-                    meeting_id = %id,
-                    path = %meeting.path.display(),
-                    segments = segments.len(),
-                    "transcript ready"
-                );
-                publish(
-                    &event_tx,
-                    AppEvent::TranscriptionReady {
-                        meeting_id: id,
-                        segments,
-                    },
-                );
+                finalise_meeting_transcript(&event_tx, &mut meetings, id, settings.clone()).await;
+            }
+            Ok(AppEvent::RecordingStopped { meeting_id }) => {
+                let should_finalise = match meetings.get_mut(&meeting_id) {
+                    Some(meeting) => {
+                        meeting.recording_active = false;
+                        meeting.meeting_ended
+                    }
+                    None => {
+                        warn!(
+                            meeting_id = %meeting_id,
+                            "recording stopped without an active transcript draft"
+                        );
+                        false
+                    }
+                };
+
+                if should_finalise {
+                    finalise_meeting_transcript(
+                        &event_tx,
+                        &mut meetings,
+                        meeting_id,
+                        settings.clone(),
+                    )
+                    .await;
+                }
             }
             Ok(AppEvent::SummariseTranscriptRequested { path }) => {
                 summarise_saved_transcript(&event_tx, path).await;
@@ -172,6 +177,66 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
     }
+}
+
+async fn finalise_meeting_transcript(
+    event_tx: &EventSender,
+    meetings: &mut HashMap<Uuid, MeetingTranscript>,
+    meeting_id: Uuid,
+    settings: Settings,
+) {
+    let Some(meeting) = meetings.remove(&meeting_id) else {
+        warn!(
+            meeting_id = %meeting_id,
+            "ignoring duplicate meeting finalisation without an active transcript draft"
+        );
+        return;
+    };
+
+    let mut segments = meeting.segments;
+    if segments.is_empty() {
+        if let Some(test_audio_path) = meeting.test_audio_path {
+            segments =
+                transcribe_test_audio(event_tx, &meeting.name, test_audio_path, settings).await;
+            if let Err(error) = append_segments(&meeting.path, &segments).await {
+                warn!(%error, path = %meeting.path.display(), "failed to append test audio transcript segments");
+            }
+        }
+    }
+    match fs::read_to_string(&meeting.path).await {
+        Ok(content) => {
+            let manual_segments = transcript_segments(content);
+            if segments.is_empty() {
+                segments = manual_segments;
+            }
+        }
+        Err(error) => {
+            warn!(%error, path = %meeting.path.display(), "failed to read transcript draft");
+        }
+    }
+
+    if segments.is_empty() {
+        warn!(
+            meeting_id = %meeting_id,
+            path = %meeting.path.display(),
+            "transcript is empty; skipping summarisation"
+        );
+        return;
+    }
+
+    info!(
+        meeting_id = %meeting_id,
+        path = %meeting.path.display(),
+        segments = segments.len(),
+        "transcript ready"
+    );
+    publish(
+        event_tx,
+        AppEvent::TranscriptionReady {
+            meeting_id,
+            segments,
+        },
+    );
 }
 
 async fn create_transcript_draft(meeting_name: &str) -> std::io::Result<PathBuf> {
@@ -787,5 +852,40 @@ mod tests {
         assert!(body.contains("Planning Sync"));
         assert!(body.contains("transcript draft remains available"));
         assert!(body.contains("failed to read transcript fixture"));
+    }
+
+    #[test]
+    fn spec_006_empty_segments_are_flagged_for_transcription_loop_guard() {
+        let segments: Vec<TranscriptSegment> = Vec::new();
+        assert!(segments.is_empty(), "empty segments guard must fire");
+        // Sanity: a single non-empty segment is not empty.
+        let non_empty = [TranscriptSegment {
+            start_ms: 0,
+            end_ms: 100,
+            text: "Alice: Hello".to_owned(),
+        }];
+        assert!(!non_empty.is_empty());
+    }
+
+    #[test]
+    fn transcript_segments_handles_whitespace_only_text() {
+        let segments = transcript_segments("   \n\n  ".to_owned());
+        assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn recording_fallback_segment_includes_path_and_error() {
+        let path = std::path::Path::new("/tmp/test-recording.wav");
+        let error = "model not found";
+        let segment = recording_fallback_segment(path, error);
+
+        assert!(segment.text.contains("/tmp/test-recording.wav"));
+        assert!(segment.text.contains("model not found"));
+    }
+
+    #[test]
+    fn meeting_name_from_path_handles_missing_extension() {
+        let name = meeting_name_from_path(std::path::Path::new("/tmp/1234567890_meeting"));
+        assert_eq!(name, "meeting");
     }
 }

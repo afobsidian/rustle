@@ -330,9 +330,8 @@ fn meeting_candidate_from_client(client: &HyprlandClient) -> Option<MeetingCandi
         return None;
     }
 
-    let title_score = title_match_score(client);
-    let class_score = class_match_score(client);
-    let score = title_score.max(class_score)?;
+    let title_score = title_match_score(client)?;
+    let score = title_score;
 
     Some(MeetingCandidate {
         address: address.to_owned(),
@@ -351,17 +350,6 @@ fn title_match_score(client: &HyprlandClient) -> Option<u8> {
         || initial_title.contains("teams.microsoft.com")
     {
         Some(2)
-    } else {
-        None
-    }
-}
-
-fn class_match_score(client: &HyprlandClient) -> Option<u8> {
-    let class_name = client.class_name.to_ascii_lowercase();
-    let initial_class = client.initial_class.to_ascii_lowercase();
-
-    if class_name.contains("teams") || initial_class.contains("teams") {
-        Some(1)
     } else {
         None
     }
@@ -416,9 +404,12 @@ fn is_meeting_title_allowed(name: &str) -> bool {
         return false;
     }
 
-    let prefix = lowered.split('|').next().map(str::trim).unwrap_or_default();
+    let has_non_meeting_segment = lowered
+        .split('|')
+        .map(str::trim)
+        .any(|segment| NON_MEETING_TITLE_PREFIXES.contains(&segment));
 
-    !NON_MEETING_TITLE_PREFIXES.contains(&prefix)
+    !has_non_meeting_segment
 }
 
 async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
@@ -624,14 +615,10 @@ mod tests {
     }
 
     #[test]
-    fn allows_class_only_match_for_non_navigation_titles() {
+    fn rejects_class_only_windows_without_teams_in_title() {
         let clients = vec![client("0xabc", "teams-for-linux", "Daily Sync")];
 
-        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
-
-        assert_eq!(candidate.address, "0xabc");
-        assert_eq!(candidate.name, "Daily Sync");
-        assert_eq!(candidate.score, 1);
+        assert_eq!(select_meeting_candidate(&clients), None);
     }
 
     #[test]
@@ -857,6 +844,210 @@ mod tests {
         assert!(
             !reader.await.expect("socket reader should join"),
             "closed socket should keep the listener in polling mode"
+        );
+    }
+
+    #[test]
+    fn chat_window_without_teams_title_is_not_meeting() {
+        let clients = vec![client("0xabc", "teams-for-linux", "Chat | Brent Wallace")];
+
+        assert_eq!(select_meeting_candidate(&clients), None);
+    }
+
+    #[test]
+    fn chat_window_with_teams_suffix_in_title_is_not_meeting() {
+        let clients = vec![client(
+            "0xabc",
+            "teams-for-linux",
+            "Chat | Brent Wallace | Microsoft Teams",
+        )];
+
+        assert_eq!(select_meeting_candidate(&clients), None);
+    }
+
+    #[test]
+    fn chat_segment_after_contact_name_is_not_meeting() {
+        let clients = vec![client(
+            "0xabc",
+            "teams-for-linux",
+            "Brent Wallace | Chat | Microsoft Teams",
+        )];
+
+        assert_eq!(select_meeting_candidate(&clients), None);
+        assert!(!is_meeting_title_allowed("Brent Wallace | Chat"));
+    }
+
+    #[test]
+    fn real_meeting_window_with_teams_in_title_is_detected() {
+        let clients = vec![client(
+            "0xabc",
+            "teams-for-linux",
+            "Sprint Planning | Microsoft Teams",
+        )];
+
+        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
+
+        assert_eq!(candidate.name, "Sprint Planning");
+        assert_eq!(candidate.score, 2);
+    }
+
+    #[test]
+    fn browser_teams_meeting_is_detected() {
+        let clients = vec![client(
+            "0xabc",
+            "chromium",
+            "Roadmap Review | Microsoft Teams | Google Chrome",
+        )];
+
+        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
+
+        assert_eq!(candidate.name, "Roadmap Review");
+        assert_eq!(candidate.score, 2);
+    }
+
+    #[test]
+    fn teams_desktop_window_with_plain_chat_title_is_rejected() {
+        let clients = vec![client("0xabc", "teams-for-linux", "Brent Wallace")];
+
+        assert_eq!(select_meeting_candidate(&clients), None);
+    }
+
+    /// Spec 022: A Teams chat window must NOT trigger meeting start events,
+    /// while a real Teams meeting window DOES trigger meeting start events.
+    /// This test exercises the full detection flow end-to-end.
+    #[test]
+    fn spec_022_chat_window_does_not_trigger_meeting_flow() {
+        let bus = rustle_core::EventBus::new();
+        let event_tx = bus.sender();
+        let mut observer = bus.subscribe();
+        let mut active_meeting: Option<DetectedMeeting> = None;
+
+        // --- Chat window must NOT trigger MeetingStarted ---
+        let chat_clients = vec![
+            client("0x111", "firefox", "GitHub"),
+            client("0x222", "teams-for-linux", "Chat | User Name"),
+        ];
+        let chat_candidate = select_meeting_candidate(&chat_clients);
+        assert!(
+            chat_candidate.is_none(),
+            "chat window should not produce a meeting candidate"
+        );
+
+        // Feed None into the state machine — should remain idle, no events.
+        apply_detected_candidate(&event_tx, &mut active_meeting, chat_candidate);
+        assert!(
+            active_meeting.is_none(),
+            "no meeting should be active after chat window"
+        );
+        assert!(
+            matches!(observer.try_recv(), Err(TryRecvError::Empty)),
+            "chat window must not emit any events"
+        );
+
+        // Also verify with the full Teams suffix on the chat title.
+        let chat_with_suffix = vec![client(
+            "0x333",
+            "teams-for-linux",
+            "Chat | User Name | Microsoft Teams",
+        )];
+        let chat_suffix_candidate = select_meeting_candidate(&chat_with_suffix);
+        assert!(
+            chat_suffix_candidate.is_none(),
+            "chat window with Teams suffix should not produce a meeting candidate"
+        );
+        apply_detected_candidate(&event_tx, &mut active_meeting, chat_suffix_candidate);
+        assert!(active_meeting.is_none());
+        assert!(
+            matches!(observer.try_recv(), Err(TryRecvError::Empty)),
+            "chat window with suffix must not emit any events"
+        );
+
+        // --- Real meeting window DOES trigger MeetingStarted ---
+        let meeting_clients = vec![
+            client("0x444", "firefox", "GitHub"),
+            client(
+                "0x555",
+                "teams-for-linux",
+                "Sprint Planning | Microsoft Teams",
+            ),
+        ];
+        let meeting_candidate = select_meeting_candidate(&meeting_clients);
+        assert!(
+            meeting_candidate.is_some(),
+            "real meeting window should produce a meeting candidate"
+        );
+
+        let candidate = meeting_candidate.unwrap();
+        assert_eq!(candidate.address, "0x555");
+        assert_eq!(candidate.name, "Sprint Planning");
+        assert_eq!(candidate.score, 2);
+
+        // Apply the candidate — MeetingStarted must be emitted.
+        apply_detected_candidate(&event_tx, &mut active_meeting, Some(candidate));
+        assert!(
+            active_meeting.is_some(),
+            "meeting should be active after real meeting window"
+        );
+
+        let event = observer
+            .try_recv()
+            .expect("MeetingStarted event should be emitted");
+        match event {
+            AppEvent::MeetingStarted { id, name, source } => {
+                assert_eq!(name, "Sprint Planning");
+                assert_eq!(source, DetectionSource::Hyprland);
+                assert_eq!(active_meeting.as_ref().unwrap().id, id);
+            }
+            other => panic!("expected MeetingStarted event, got {other:?}"),
+        }
+
+        // No further events should be pending.
+        assert!(
+            matches!(observer.try_recv(), Err(TryRecvError::Empty)),
+            "only one MeetingStarted event should have been emitted"
+        );
+    }
+
+    #[test]
+    fn meeting_name_with_special_characters_is_normalized() {
+        let result = normalize_meeting_name("Q4 Planning (Final) | Microsoft Teams");
+        assert_eq!(result, Some("Q4 Planning (Final)".to_owned()));
+    }
+
+    #[test]
+    fn empty_title_returns_none() {
+        let c = client("0xabc", "teams-for-linux", "");
+        assert_eq!(meeting_candidate_from_client(&c), None);
+    }
+
+    #[test]
+    fn whitespace_only_title_returns_none() {
+        let c = client("0xabc", "teams-for-linux", "   ");
+        assert_eq!(meeting_candidate_from_client(&c), None);
+    }
+
+    #[test]
+    fn multiple_meeting_windows_picks_highest_score() {
+        let clients = vec![
+            client(
+                "0x111",
+                "chromium",
+                "Sprint Planning | Microsoft Teams | Google Chrome",
+            ),
+            client(
+                "0x222",
+                "teams-for-linux",
+                "Daily Standup | Microsoft Teams",
+            ),
+        ];
+
+        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
+
+        assert_eq!(candidate.score, 2);
+        assert!(
+            candidate.name == "Sprint Planning" || candidate.name == "Daily Standup",
+            "expected one of the meeting names, got {:?}",
+            candidate.name
         );
     }
 }

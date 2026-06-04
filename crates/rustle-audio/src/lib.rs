@@ -10,7 +10,7 @@ use rustle_core::{
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 const RECORDING_SAMPLE_RATE: &str = "16000";
@@ -219,6 +219,8 @@ async fn record_chunk(
     let command = recorder_command(backend, &config.input_device, path);
     let mut child = Command::new(command.program)
         .args(command.args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("failed to launch recorder: {error}"))?;
@@ -227,19 +229,36 @@ async fn record_chunk(
     let duration = tokio::time::sleep(config.chunk_duration.max(STOP_POLL_INTERVAL));
     tokio::pin!(startup_timeout);
     tokio::pin!(duration);
-
     loop {
         tokio::select! {
             status = child.wait() => {
                 let status = status.map_err(|error| format!("failed to wait for recorder: {error}"))?;
+                // Capture stderr for debugging
+                let mut stderr_output = String::new();
+                if let Some(stderr) = child.stderr.take() {
+                    use tokio::io::AsyncReadExt;
+                    let _ = stderr.take(1024 * 1024).read_to_string(&mut stderr_output).await;
+                }
                 if !status.success() {
-                    return Err(format!("recorder exited with status {status}"));
+                    let err_msg = format!("recorder exited with status {status}");
+                    if !stderr_output.is_empty() {
+                        warn!(backend = ?backend, stderr = %stderr_output, "{}", err_msg);
+                    }
+                    return Err(err_msg);
+                } else if !stderr_output.is_empty() {
+                    debug!(backend = ?backend, stderr = %stderr_output, "recorder stderr output");
                 }
                 return Ok(true);
             }
             _ = stop_rx.recv() => {
                 stop_child(&mut child).await?;
                 return Ok(true);
+            }
+            _ = interval.tick() => {
+                if file_len(path).await >= config.max_chunk_bytes {
+                    stop_child(&mut child).await?;
+                    return Ok(false);
+                }
             }
             _ = &mut startup_timeout => {
                 if recorder_startup_stalled(file_len(path).await) {
@@ -254,31 +273,49 @@ async fn record_chunk(
                 stop_child(&mut child).await?;
                 return Ok(false);
             }
-            _ = interval.tick() => {
-                if file_len(path).await >= config.max_chunk_bytes {
-                    stop_child(&mut child).await?;
-                    return Ok(false);
+        }
+    }
+}
+async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
+    // Try graceful shutdown first with SIGTERM (allows recorder to finalize WAV header)
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+        if let Some(pid) = child.id() {
+            let pid_i32 = pid as i32;
+            debug!(
+                pid = pid_i32,
+                "sending SIGTERM to recorder for graceful shutdown"
+            );
+            if let Err(e) = kill(Pid::from_raw(pid_i32), Signal::SIGTERM) {
+                warn!(pid = pid_i32, error = %e, "failed to send SIGTERM, falling back to SIGKILL");
+                return child
+                    .start_kill()
+                    .map_err(|e| format!("failed to kill recorder: {e}"));
+            }
+            match tokio::time::timeout(RECORDER_STOP_TIMEOUT, child.wait()).await {
+                Ok(Ok(_status)) => {
+                    debug!(pid = pid_i32, "recorder exited gracefully after SIGTERM");
+                    return Ok(());
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("failed to wait for recorder after SIGTERM: {e}"));
+                }
+                Err(_) => {
+                    warn!(
+                        pid = pid_i32,
+                        timeout_secs = RECORDER_STOP_TIMEOUT.as_secs(),
+                        "recorder did not exit before timeout, sending SIGKILL"
+                    );
                 }
             }
         }
     }
-}
-
-async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
-    if let Err(error) = child.start_kill() {
-        return Err(format!("failed to stop audio recorder: {error}"));
-    }
-
-    match tokio::time::timeout(RECORDER_STOP_TIMEOUT, child.wait()).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => Err(format!(
-            "failed to wait for stopped audio recorder: {error}"
-        )),
-        Err(_) => Err(format!(
-            "timed out waiting {}s for audio recorder to stop",
-            RECORDER_STOP_TIMEOUT.as_secs()
-        )),
-    }
+    // Fallback to SIGKILL (or Windows/non-Unix)
+    child
+        .start_kill()
+        .map_err(|e| format!("failed to kill recorder: {e}"))
 }
 
 fn recorder_startup_stalled(file_len: u64) -> bool {
