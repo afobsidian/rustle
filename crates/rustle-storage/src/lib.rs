@@ -358,10 +358,7 @@ mod tests {
 
     #[test]
     fn parse_document_returns_none_for_invalid_filename() {
-        let result = parse_document(
-            PathBuf::from("/"),
-            StoredDocumentKind::Note,
-        );
+        let result = parse_document(PathBuf::from("/"), StoredDocumentKind::Note);
         assert!(result.is_none());
     }
 

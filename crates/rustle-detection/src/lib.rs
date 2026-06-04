@@ -355,7 +355,6 @@ fn title_match_score(client: &HyprlandClient) -> Option<u8> {
     }
 }
 
-
 fn meeting_name_from_client(client: &HyprlandClient) -> String {
     normalize_meeting_name(&client.title)
         .or_else(|| normalize_meeting_name(&client.initial_title))
@@ -405,9 +404,12 @@ fn is_meeting_title_allowed(name: &str) -> bool {
         return false;
     }
 
-    let prefix = lowered.split('|').next().map(str::trim).unwrap_or_default();
+    let has_non_meeting_segment = lowered
+        .split('|')
+        .map(str::trim)
+        .any(|segment| NON_MEETING_TITLE_PREFIXES.contains(&segment));
 
-    !NON_MEETING_TITLE_PREFIXES.contains(&prefix)
+    !has_non_meeting_segment
 }
 
 async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
@@ -864,6 +866,18 @@ mod tests {
     }
 
     #[test]
+    fn chat_segment_after_contact_name_is_not_meeting() {
+        let clients = vec![client(
+            "0xabc",
+            "teams-for-linux",
+            "Brent Wallace | Chat | Microsoft Teams",
+        )];
+
+        assert_eq!(select_meeting_candidate(&clients), None);
+        assert!(!is_meeting_title_allowed("Brent Wallace | Chat"));
+    }
+
+    #[test]
     fn real_meeting_window_with_teams_in_title_is_detected() {
         let clients = vec![client(
             "0xabc",
@@ -921,7 +935,10 @@ mod tests {
 
         // Feed None into the state machine — should remain idle, no events.
         apply_detected_candidate(&event_tx, &mut active_meeting, chat_candidate);
-        assert!(active_meeting.is_none(), "no meeting should be active after chat window");
+        assert!(
+            active_meeting.is_none(),
+            "no meeting should be active after chat window"
+        );
         assert!(
             matches!(observer.try_recv(), Err(TryRecvError::Empty)),
             "chat window must not emit any events"
@@ -948,7 +965,11 @@ mod tests {
         // --- Real meeting window DOES trigger MeetingStarted ---
         let meeting_clients = vec![
             client("0x444", "firefox", "GitHub"),
-            client("0x555", "teams-for-linux", "Sprint Planning | Microsoft Teams"),
+            client(
+                "0x555",
+                "teams-for-linux",
+                "Sprint Planning | Microsoft Teams",
+            ),
         ];
         let meeting_candidate = select_meeting_candidate(&meeting_clients);
         assert!(
@@ -963,9 +984,14 @@ mod tests {
 
         // Apply the candidate — MeetingStarted must be emitted.
         apply_detected_candidate(&event_tx, &mut active_meeting, Some(candidate));
-        assert!(active_meeting.is_some(), "meeting should be active after real meeting window");
+        assert!(
+            active_meeting.is_some(),
+            "meeting should be active after real meeting window"
+        );
 
-        let event = observer.try_recv().expect("MeetingStarted event should be emitted");
+        let event = observer
+            .try_recv()
+            .expect("MeetingStarted event should be emitted");
         match event {
             AppEvent::MeetingStarted { id, name, source } => {
                 assert_eq!(name, "Sprint Planning");
@@ -1003,12 +1029,19 @@ mod tests {
     #[test]
     fn multiple_meeting_windows_picks_highest_score() {
         let clients = vec![
-            client("0x111", "chromium", "Sprint Planning | Microsoft Teams | Google Chrome"),
-            client("0x222", "teams-for-linux", "Daily Standup | Microsoft Teams"),
+            client(
+                "0x111",
+                "chromium",
+                "Sprint Planning | Microsoft Teams | Google Chrome",
+            ),
+            client(
+                "0x222",
+                "teams-for-linux",
+                "Daily Standup | Microsoft Teams",
+            ),
         ];
 
-        let candidate =
-            select_meeting_candidate(&clients).expect("meeting candidate should exist");
+        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
 
         assert_eq!(candidate.score, 2);
         assert!(

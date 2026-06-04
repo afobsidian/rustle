@@ -254,6 +254,12 @@ async fn record_chunk(
                 stop_child(&mut child).await?;
                 return Ok(true);
             }
+            _ = interval.tick() => {
+                if file_len(path).await >= config.max_chunk_bytes {
+                    stop_child(&mut child).await?;
+                    return Ok(false);
+                }
+            }
             _ = &mut startup_timeout => {
                 if recorder_startup_stalled(file_len(path).await) {
                     stop_child(&mut child).await?;
@@ -278,13 +284,17 @@ async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
         use nix::unistd::Pid;
         if let Some(pid) = child.id() {
             let pid_i32 = pid as i32;
-            debug!(pid = pid_i32, "sending SIGTERM to recorder for graceful shutdown");
+            debug!(
+                pid = pid_i32,
+                "sending SIGTERM to recorder for graceful shutdown"
+            );
             if let Err(e) = kill(Pid::from_raw(pid_i32), Signal::SIGTERM) {
                 warn!(pid = pid_i32, error = %e, "failed to send SIGTERM, falling back to SIGKILL");
-                return child.start_kill().map_err(|e| format!("failed to kill recorder: {e}"));
+                return child
+                    .start_kill()
+                    .map_err(|e| format!("failed to kill recorder: {e}"));
             }
-            // Wait up to 3 seconds for graceful shutdown
-            match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
+            match tokio::time::timeout(RECORDER_STOP_TIMEOUT, child.wait()).await {
                 Ok(Ok(_status)) => {
                     debug!(pid = pid_i32, "recorder exited gracefully after SIGTERM");
                     return Ok(());
@@ -293,13 +303,19 @@ async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
                     return Err(format!("failed to wait for recorder after SIGTERM: {e}"));
                 }
                 Err(_) => {
-                    warn!(pid = pid_i32, "recorder did not exit within 3s, sending SIGKILL");
+                    warn!(
+                        pid = pid_i32,
+                        timeout_secs = RECORDER_STOP_TIMEOUT.as_secs(),
+                        "recorder did not exit before timeout, sending SIGKILL"
+                    );
                 }
             }
         }
     }
     // Fallback to SIGKILL (or Windows/non-Unix)
-    child.start_kill().map_err(|e| format!("failed to kill recorder: {e}"))
+    child
+        .start_kill()
+        .map_err(|e| format!("failed to kill recorder: {e}"))
 }
 
 fn recorder_startup_stalled(file_len: u64) -> bool {

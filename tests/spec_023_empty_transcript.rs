@@ -59,7 +59,8 @@ async fn spec_023_empty_transcript_does_not_trigger_summarisation() -> Result<()
             .map_err(|_| "timed out waiting for transcript draft".to_owned())?
             .map_err(|e| e.to_string())?;
 
-        if matches!(event, AppEvent::TranscriptDraftReady { meeting_id: id, .. } if id == meeting_id) {
+        if matches!(event, AppEvent::TranscriptDraftReady { meeting_id: id, .. } if id == meeting_id)
+        {
             break;
         }
     }
@@ -73,7 +74,10 @@ async fn spec_023_empty_transcript_does_not_trigger_summarisation() -> Result<()
         loop {
             match observer.recv().await {
                 Ok(AppEvent::TranscriptionReady { meeting_id: id, .. }) if id == meeting_id => {
-                    return Err("TranscriptionReady should NOT be published for empty transcript".to_owned());
+                    return Err(
+                        "TranscriptionReady should NOT be published for empty transcript"
+                            .to_owned(),
+                    );
                 }
                 Ok(AppEvent::QuitRequested) => break,
                 Ok(_) => continue,
@@ -81,7 +85,8 @@ async fn spec_023_empty_transcript_does_not_trigger_summarisation() -> Result<()
             }
         }
         Ok(())
-    }).await;
+    })
+    .await;
 
     // The timeout should expire (meaning no TranscriptionReady was published)
     // OR we should get the timeout error
@@ -107,7 +112,8 @@ async fn spec_023_empty_transcript_does_not_trigger_summarisation() -> Result<()
         }
     }
 
-    bus.publish(AppEvent::QuitRequested).expect("quit should publish");
+    bus.publish(AppEvent::QuitRequested)
+        .expect("quit should publish");
 
     restore_env_var("XDG_CONFIG_HOME", previous_xdg_config_home);
     restore_env_var("XDG_DATA_HOME", previous_xdg_data_home);
