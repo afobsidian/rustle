@@ -30,6 +30,9 @@ const NON_MEETING_TITLE_PREFIXES: &[&str] = &[
     "tasks",
     "communities",
     "more",
+    "meeting compact view",
+    "teams and channels",
+    "waiting for network...",
 ];
 const TEAMS_TITLE_SUFFIXES: &[&str] = &[
     " | Microsoft Teams",
@@ -378,6 +381,14 @@ fn normalize_meeting_name(raw_title: &str) -> Option<String> {
         }
     }
 
+    let normalized = normalized
+        .split('|')
+        .map(strip_leading_notification_badges)
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
+
     if normalized.is_empty() {
         return Some("Microsoft Teams".to_owned());
     }
@@ -398,18 +409,49 @@ fn strip_known_suffixes(value: &str, suffixes: &[&str]) -> Option<String> {
     })
 }
 
+fn strip_leading_notification_badges(value: &str) -> &str {
+    let mut trimmed = value.trim();
+
+    loop {
+        let Some(rest) = trimmed.strip_prefix('(') else {
+            break;
+        };
+        let Some((count, suffix)) = rest.split_once(')') else {
+            break;
+        };
+        if count.is_empty() || !count.chars().all(|character| character.is_ascii_digit()) {
+            break;
+        }
+        trimmed = suffix.trim_start();
+    }
+
+    trimmed
+}
+
+fn normalized_title_segment(segment: &str) -> String {
+    strip_leading_notification_badges(segment).to_ascii_lowercase()
+}
+
+fn normalized_title_segments(name: &str) -> Vec<String> {
+    name.split('|')
+        .map(normalized_title_segment)
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
 fn is_meeting_title_allowed(name: &str) -> bool {
-    let lowered = name.trim().to_ascii_lowercase();
-    if lowered.is_empty() || lowered == "microsoft teams" {
+    let segments = normalized_title_segments(name);
+    if segments.is_empty() {
         return false;
     }
 
-    let has_non_meeting_segment = lowered
-        .split('|')
-        .map(str::trim)
-        .any(|segment| NON_MEETING_TITLE_PREFIXES.contains(&segment));
+    if segments.len() == 1 && segments[0] == "microsoft teams" {
+        return false;
+    }
 
-    !has_non_meeting_segment
+    !segments
+        .iter()
+        .any(|segment| NON_MEETING_TITLE_PREFIXES.contains(&segment.as_str()))
 }
 
 async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
@@ -655,6 +697,12 @@ mod tests {
 
         assert_eq!(select_meeting_candidate(&clients), None);
         assert!(!is_meeting_title_allowed("Calendar | Brent Wallace"));
+        assert!(!is_meeting_title_allowed("(1) Calendar | Brent Wallace"));
+        assert!(!is_meeting_title_allowed("(1) Activity | Brent Wallace"));
+        assert!(!is_meeting_title_allowed("(1) Chat | Justin Gilmour"));
+        assert!(!is_meeting_title_allowed("(1) Chat | Meeting compact view | Krishna Kongara"));
+        assert!(!is_meeting_title_allowed("Waiting for network..."));
+        assert!(!is_meeting_title_allowed("Teams and Channels"));
         assert!(!is_meeting_title_allowed("Microsoft Teams"));
         assert!(!is_meeting_title_allowed("Chat | teams.microsoft.com"));
     }
@@ -1050,4 +1098,74 @@ mod tests {
             candidate.name
         );
     }
+
+    #[test]
+    fn strips_notification_badges_from_meeting_names() {
+        assert_eq!(
+            normalize_meeting_name("(1) Sprint Planning | Microsoft Teams"),
+            Some("Sprint Planning".to_owned())
+        );
+        assert_eq!(
+            normalize_meeting_name("(12) Design Review | Weekly Sync | Microsoft Teams"),
+            Some("Design Review | Weekly Sync".to_owned())
+        );
+    }
+
+    #[test]
+    fn log_derived_false_positive_titles_are_rejected() {
+        for title in [
+            "Waiting for network... | Microsoft Teams",
+            "Teams and Channels | Microsoft Teams",
+            "(1) Calendar | Sydney Crew | Microsoft Teams",
+            "(1) Activity | Brent Wallace | Microsoft Teams",
+            "(1) Chat | Justin Gilmour | Microsoft Teams",
+            "(1) Chat | Meeting compact view | Krishna Kongara | Microsoft Teams",
+        ] {
+            let clients = vec![client("0xabc", "teams-for-linux", title)];
+            assert_eq!(
+                select_meeting_candidate(&clients),
+                None,
+                "{title} should not produce a meeting candidate"
+            );
+        }
+    }
+
+    #[test]
+    fn unread_count_prefix_still_allows_real_meeting_detection() {
+        let clients = vec![client(
+            "0xabc",
+            "teams-for-linux",
+            "(1) Sprint Planning | Microsoft Teams",
+        )];
+
+        let candidate = select_meeting_candidate(&clients).expect("meeting candidate should exist");
+        assert_eq!(candidate.name, "Sprint Planning");
+        assert_eq!(candidate.score, 2);
+    }
+
+    #[test]
+    fn log_derived_false_positive_titles_do_not_trigger_meeting_flow() {
+        let bus = rustle_core::EventBus::new();
+        let event_tx = bus.sender();
+        let mut observer = bus.subscribe();
+        let mut active_meeting: Option<DetectedMeeting> = None;
+
+        for title in [
+            "Waiting for network... | Microsoft Teams",
+            "Teams and Channels | Microsoft Teams",
+            "(1) Calendar | Sydney Crew | Microsoft Teams",
+            "(1) Activity | Brent Wallace | Microsoft Teams",
+            "(1) Chat | Justin Gilmour | Microsoft Teams",
+            "(1) Chat | Meeting compact view | Krishna Kongara | Microsoft Teams",
+        ] {
+            let candidate = select_meeting_candidate(&[client("0xabc", "teams-for-linux", title)]);
+            apply_detected_candidate(&event_tx, &mut active_meeting, candidate);
+            assert!(active_meeting.is_none(), "{title} should not activate a meeting");
+            assert!(
+                matches!(observer.try_recv(), Err(TryRecvError::Empty)),
+                "{title} should not emit MeetingStarted"
+            );
+        }
+    }
+
 }

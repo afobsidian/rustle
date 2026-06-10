@@ -124,17 +124,17 @@ Host assumptions:
 
 Record the current release-signoff run in this table:
 
-| Scenario | How to run | Pass criteria | Result | Notes |
-| -------- | ---------- | ------------- | ------ | ----- |
-| Tray startup | Launch Rustle in the host session. | Tray registers successfully and stays running. | `PASS` / `FAIL` / `BLOCKED` | Record missing watcher or icon issues. |
-| Manual meeting flow | Start a manual meeting, add transcript content, stop the meeting. | Transcript draft and Markdown notes are both created. | `PASS` / `FAIL` / `BLOCKED` | Note transcript and note paths. |
-| Transcript access | During an active meeting, use `transcript` and `open`. | Both open the current transcript draft. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path. |
-| Settings access | Use `settings`. | Rustle opens the settings file through the desktop opener, or falls back to `$VISUAL` / `$EDITOR` when needed. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path or failure. |
-| Notes access after stop | After a meeting ends, use `open`. | Rustle opens the latest saved note. | `PASS` / `FAIL` / `BLOCKED` | Record the opened note path. |
-| Notifications | Trigger meeting start/detection and saved-note events. | Notifications are delivered without crashing Rustle. | `PASS` / `FAIL` / `BLOCKED` | Record notification count or viewer evidence. |
-| Shutdown | Use `quit`. | Rustle exits cleanly. | `PASS` / `FAIL` / `BLOCKED` | Record any lingering-process issue. |
-| Hyprland auto-detection | Present a Hyprland client titled like a Teams meeting, then close it. | Rustle detects the meeting, creates a transcript draft, and clears the meeting when the window closes. | `PASS` / `FAIL` / `BLOCKED` | Record the client title used. |
-| Known-WAV transcription | Run with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`, then start and stop a manual meeting. | Rustle transcribes the WAV, writes the transcript draft, and saves notes. | `PASS` / `FAIL` / `BLOCKED` | Record the WAV path and a transcript excerpt. |
+| Scenario                | How to run                                                                                   | Pass criteria                                                                                                  | Result                      | Notes                                         |
+| ----------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------- | --------------------------------------------- |
+| Tray startup            | Launch Rustle in the host session.                                                           | Tray registers successfully and stays running.                                                                 | `PASS` / `FAIL` / `BLOCKED` | Record missing watcher or icon issues.        |
+| Manual meeting flow     | Start a manual meeting, add transcript content, stop the meeting.                            | Transcript draft and Markdown notes are both created.                                                          | `PASS` / `FAIL` / `BLOCKED` | Note transcript and note paths.               |
+| Transcript access       | During an active meeting, use `transcript` and `open`.                                       | Both open the current transcript draft.                                                                        | `PASS` / `FAIL` / `BLOCKED` | Record the opened path.                       |
+| Settings access         | Use `settings`.                                                                              | Rustle opens the settings file through the desktop opener, or falls back to `$VISUAL` / `$EDITOR` when needed. | `PASS` / `FAIL` / `BLOCKED` | Record the opened path or failure.            |
+| Notes access after stop | After a meeting ends, use `open`.                                                            | Rustle opens the latest saved note.                                                                            | `PASS` / `FAIL` / `BLOCKED` | Record the opened note path.                  |
+| Notifications           | Trigger meeting start/detection and saved-note events.                                       | Notifications are delivered without crashing Rustle.                                                           | `PASS` / `FAIL` / `BLOCKED` | Record notification count or viewer evidence. |
+| Shutdown                | Use `quit`.                                                                                  | Rustle exits cleanly.                                                                                          | `PASS` / `FAIL` / `BLOCKED` | Record any lingering-process issue.           |
+| Hyprland auto-detection | Present a Hyprland client titled like a Teams meeting, then close it.                        | Rustle detects the meeting, creates a transcript draft, and clears the meeting when the window closes.         | `PASS` / `FAIL` / `BLOCKED` | Record the client title used.                 |
+| Known-WAV transcription | Run with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`, then start and stop a manual meeting. | Rustle transcribes the WAV, writes the transcript draft, and saves notes.                                      | `PASS` / `FAIL` / `BLOCKED` | Record the WAV path and a transcript excerpt. |
 
 ## Local validation
 
@@ -205,25 +205,25 @@ The release candidate should only pass when every required item below is green. 
 
 ### Packaging gate
 
-| Check | Command | Pass criteria | Fail criteria |
-| ----- | ------- | ------------- | ------------- |
-| Install layout | `make install` | Binary is executable at the install bin path and both tray icons exist under the install data path. | Build fails, binary is missing or not executable, or either icon is missing. |
-| Release binary | `make release-build` | `target/release/rustle` is produced successfully. | Release build fails or the optimized binary is missing. |
-| Tarball + checksum | `make dist` | `dist/rustle-<version>-<host>.tar.gz` and `.sha256` are created. | Packaging fails or either artifact is missing. |
-| RPM + checksum | `make rpm` | `dist/rustle-<version>-1.<arch>.rpm` and `.sha256` are created. | RPM packaging fails or either artifact is missing. |
-| Checksum verification | `sha256sum -c dist/*.sha256` | Every generated release artifact verifies as `OK`. | Any generated checksum does not verify. |
+| Check                 | Command                      | Pass criteria                                                                                       | Fail criteria                                                                |
+| --------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Install layout        | `make install`               | Binary is executable at the install bin path and both tray icons exist under the install data path. | Build fails, binary is missing or not executable, or either icon is missing. |
+| Release binary        | `make release-build`         | `target/release/rustle` is produced successfully.                                                   | Release build fails or the optimized binary is missing.                      |
+| Tarball + checksum    | `make dist`                  | `dist/rustle-<version>-<host>.tar.gz` and `.sha256` are created.                                    | Packaging fails or either artifact is missing.                               |
+| RPM + checksum        | `make rpm`                   | `dist/rustle-<version>-1.<arch>.rpm` and `.sha256` are created.                                     | RPM packaging fails or either artifact is missing.                           |
+| Checksum verification | `sha256sum -c dist/*.sha256` | Every generated release artifact verifies as `OK`.                                                  | Any generated checksum does not verify.                                      |
 
 ### Startup and post-install usability gate
 
 Run these checks from a Fedora Linux session on Hyprland with an SNI host such as Waybar using the installed binary, not `cargo run`.
 
-| Check | How to validate | Pass criteria | Fail criteria |
-| ----- | --------------- | ------------- | ------------- |
-| Tray startup | Launch the installed `rustle` binary. | Rustle starts, stays running, and the tray icon resolves from the installed icon directory. | Startup crashes, exits unexpectedly, or shows a missing icon. |
-| Manual workflow | Start a manual meeting, then stop it after transcript content is available. | Transcript draft and saved Markdown notes are created successfully. | Manual start/stop fails or no transcript/note output is created. |
-| Settings access | Use the tray or terminal fallback `settings` command. | The settings file opens via the desktop opener, or falls back to `$VISUAL` / `$EDITOR` when needed. | Settings cannot be opened. |
-| Notes and transcript access | Use `open` and `transcript` during and after a meeting. | Active transcript opens during the meeting; latest note opens after stop. | Wrong target opens or the command fails. |
-| Notifications | Trigger meeting start, saved-note, and fallback notifications. | User-visible notifications appear when available; delivery failures are logged without crashing Rustle. | Notifications crash the app or expected user-visible fallbacks are silent. |
+| Check                       | How to validate                                                             | Pass criteria                                                                                           | Fail criteria                                                              |
+| --------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Tray startup                | Launch the installed `rustle` binary.                                       | Rustle starts, stays running, and the tray icon resolves from the installed icon directory.             | Startup crashes, exits unexpectedly, or shows a missing icon.              |
+| Manual workflow             | Start a manual meeting, then stop it after transcript content is available. | Transcript draft and saved Markdown notes are created successfully.                                     | Manual start/stop fails or no transcript/note output is created.           |
+| Settings access             | Use the tray or terminal fallback `settings` command.                       | The settings file opens via the desktop opener, or falls back to `$VISUAL` / `$EDITOR` when needed.     | Settings cannot be opened.                                                 |
+| Notes and transcript access | Use `open` and `transcript` during and after a meeting.                     | Active transcript opens during the meeting; latest note opens after stop.                               | Wrong target opens or the command fails.                                   |
+| Notifications               | Trigger meeting start, saved-note, and fallback notifications.              | User-visible notifications appear when available; delivery failures are logged without crashing Rustle. | Notifications crash the app or expected user-visible fallbacks are silent. |
 
 ### Validated RC preparation flow
 
@@ -266,19 +266,19 @@ Observed results from that run:
 
 Tests should cite the relevant spec identifier from `docs/specification.md` in the test name. Current automated coverage includes both foundational specs and release-contract hardening:
 
-| Spec | Automated coverage |
-| ---- | ------------------ |
-| SPEC-006 · Audio Transcription | `crates/rustle-transcription/src/lib.rs` validates fixture handling, default model-path behavior, and unsupported OpenAI fallback messaging. |
-| SPEC-009 · Persistent Settings | `crates/rustle-core/tests/spec_009_settings.rs` validates defaults, TOML round trips, invalid-value fallback, legacy coercions, and owner-only settings permissions. |
-| SPEC-012 · Fault Tolerance | `crates/rustle-core/tests/spec_012_event_bus.rs` validates event bus delivery and no-receiver error reporting. |
-| SPEC-017 · Detection State Transitions | `crates/rustle-detection/src/lib.rs` validates start/end transitions, relevant socket event triggers, and polling fallback when the Hyprland socket closes. |
-| SPEC-018 · File-Backed Safety Nets | `crates/rustle-transcription/src/lib.rs`, `crates/rustle-ai/src/lib.rs`, and `crates/rustle-storage/src/lib.rs` validate observable fallbacks, persistence safety, and write/delete failure handling. |
-| SPEC-021 · End-to-End Manual Workflow | `tests/spec_021_manual_workflow.rs` validates the deterministic manual workflow across transcription, AI fallback, storage, and notifications. |
-| SPEC-022 · Teams Chat False-Positive Guard | `crates/rustle-detection/src/lib.rs` validates that chat-style Teams titles stay filtered while real meeting titles still detect. |
-| SPEC-023 · Empty Transcript Guard | `tests/spec_023_empty_transcript.rs` validates that empty drafts do not publish `TranscriptionReady` or trigger summarisation. |
-| SPEC-024 · Final Recording Chunk Ordering | `tests/spec_024_meeting_recording_finalization.rs` validates that transcription waits for the final recording chunk and `RecordingStopped` before finalising the meeting. |
-| SPEC-025 · Current Work Open Routing | `crates/rustle-ui/src/lib.rs` validates transcript-first open routing during active meetings, latest-note routing while idle, and notes-folder fallback when no documents exist. |
-| SPEC-026 · Review & Edit Workflow Menu | `crates/rustle-tray/src/lib.rs` validates workflow-status labels, top-level workflow grouping, review submenu layout, and note/transcript action exposure. |
-| SPEC-027 · Desktop Opener and Settings Bootstrap | `crates/rustle-ui/src/lib.rs` validates settings-file bootstrap, non-file rejection, `xdg-open` ordering, and `$VISUAL` / `$EDITOR` fallback precedence. |
+| Spec                                             | Automated coverage                                                                                                                                                                                    |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SPEC-006 · Audio Transcription                   | `crates/rustle-transcription/src/lib.rs` validates fixture handling, default model-path behavior, and unsupported OpenAI fallback messaging.                                                          |
+| SPEC-009 · Persistent Settings                   | `crates/rustle-core/tests/spec_009_settings.rs` validates defaults, TOML round trips, invalid-value fallback, legacy coercions, and owner-only settings permissions.                                  |
+| SPEC-012 · Fault Tolerance                       | `crates/rustle-core/tests/spec_012_event_bus.rs` validates event bus delivery and no-receiver error reporting.                                                                                        |
+| SPEC-017 · Detection State Transitions           | `crates/rustle-detection/src/lib.rs` validates start/end transitions, relevant socket event triggers, and polling fallback when the Hyprland socket closes.                                           |
+| SPEC-018 · File-Backed Safety Nets               | `crates/rustle-transcription/src/lib.rs`, `crates/rustle-ai/src/lib.rs`, and `crates/rustle-storage/src/lib.rs` validate observable fallbacks, persistence safety, and write/delete failure handling. |
+| SPEC-021 · End-to-End Manual Workflow            | `tests/spec_021_manual_workflow.rs` validates the deterministic manual workflow across transcription, AI fallback, storage, and notifications.                                                        |
+| SPEC-022 · Teams Chat False-Positive Guard       | `crates/rustle-detection/src/lib.rs` validates that chat-style Teams titles stay filtered while real meeting titles still detect.                                                                     |
+| SPEC-023 · Empty Transcript Guard                | `tests/spec_023_empty_transcript.rs` validates that empty drafts do not publish `TranscriptionReady` or trigger summarisation.                                                                        |
+| SPEC-024 · Final Recording Chunk Ordering        | `tests/spec_024_meeting_recording_finalization.rs` validates that transcription waits for the final recording chunk and `RecordingStopped` before finalising the meeting.                             |
+| SPEC-025 · Current Work Open Routing             | `crates/rustle-ui/src/lib.rs` validates transcript-first open routing during active meetings, latest-note routing while idle, and notes-folder fallback when no documents exist.                      |
+| SPEC-026 · Review & Edit Workflow Menu           | `crates/rustle-tray/src/lib.rs` validates workflow-status labels, top-level workflow grouping, review submenu layout, and note/transcript action exposure.                                            |
+| SPEC-027 · Desktop Opener and Settings Bootstrap | `crates/rustle-ui/src/lib.rs` validates settings-file bootstrap, non-file rejection, `xdg-open` ordering, and `$VISUAL` / `$EDITOR` fallback precedence.                                              |
 
 Future feature work should add matching `spec_<id>_*.rs` tests or release-contract tests for new DBus, Hyprland IPC, PipeWire, transcription, AI, and storage behavior described in `docs/specification.md`.

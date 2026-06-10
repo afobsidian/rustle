@@ -26,10 +26,10 @@ Rustle is a tray-first, file-backed desktop application for Fedora Linux on Hypr
        ┌──────────────┬───────────────┼───────────────┬──────────────┬──────────────┐
        ▼              ▼               ▼               ▼              ▼              ▼
   rustle-tray   rustle-detection  rustle-audio  rustle-transcription  rustle-ai  rustle-storage
-       │                                                                                 │
-       └──────────────────────────────────────────────┬──────────────────────────────────┘
-                                                      ▼
-                                                 rustle-ui
+       │                                                                            │
+       └──────────────────────────────┬─────────────────────────────────────────────┘
+                                      ▼
+                                 rustle-ui
 
    app modules in the root crate:
    - diagnostics: tracing subscriber + panic hook
@@ -63,19 +63,19 @@ Each subsystem usually spawns its own long-lived async loop with `rustle_core::t
 
 ## Crate and module boundaries
 
-| Component | Responsibility | Key dependencies / host contracts |
-| --------- | -------------- | --------------------------------- |
-| `rustle-core` | Shared settings, paths, errors, types, and the event bus contract. | `tokio::sync::broadcast`, `serde`, XDG path resolution. |
-| `rustle-tray` | StatusNotifierItem tray integration and terminal fallback commands. Publishes user intents such as start, stop, open, settings, delete, and summarise. | `ksni`, `rustle-storage` listing helpers. |
-| `rustle-detection` | Hyprland client inspection and socket2 event listening for Teams meeting detection. | `hyprctl`, Hyprland socket2, supported browser/window title patterns. |
-| `rustle-audio` | Recorder backend selection and chunked WAV capture. | `pw-record`, `parecord`, `arecord`, filesystem-backed recording chunks. |
-| `rustle-transcription` | Transcript draft creation and local Whisper transcription for chunk outputs or deterministic test fixtures. | `whisper-rs`, transcript draft files, optional `RUSTLE_TEST_AUDIO_FILE`. |
-| `rustle-ai` | Transcript-to-notes summarisation and fallback note generation. | `llama-cpp-2`, optional Ollama, explicit unsupported hosted-provider fallbacks. |
-| `rustle-storage` | Saving notes, listing notes/transcripts, and safe deletion inside managed directories. | Markdown note files, transcript files, XDG data paths. |
-| `rustle-ui` | Opening notes, transcript drafts, and settings through `xdg-open`, with `$VISUAL` or `$EDITOR` as fallbacks. | Desktop opener/editor process spawning. |
-| `src/notifications.rs` | Desktop notification delivery for major workflow events and user-visible fallbacks. | `notify-rust`, freedesktop notifications DBus service. |
-| `src/autostart.rs` | Reconciles XDG autostart or systemd user-service startup artifacts from settings. | `~/.config/autostart`, `~/.config/systemd/user`. |
-| `src/diagnostics.rs` | Structured logging to stderr and file plus top-level panic capture. | `tracing`, `tracing-subscriber`, `~/.local/share/rustle/logs/rustle.log`. |
+| Component              | Responsibility                                                                                                                                         | Key dependencies / host contracts                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `rustle-core`          | Shared settings, paths, errors, types, and the event bus contract.                                                                                     | `tokio::sync::broadcast`, `serde`, XDG path resolution.                         |
+| `rustle-tray`          | StatusNotifierItem tray integration and terminal fallback commands. Publishes user intents such as start, stop, open, settings, delete, and summarise. | `ksni`, `rustle-storage` listing helpers.                                       |
+| `rustle-detection`     | Hyprland client inspection and socket2 event listening for Teams meeting detection.                                                                    | `hyprctl`, Hyprland socket2, supported browser/window title patterns.           |
+| `rustle-audio`         | Recorder backend selection and chunked WAV capture.                                                                                                    | `pw-record`, `parecord`, `arecord`, filesystem-backed recording chunks.         |
+| `rustle-transcription` | Transcript draft creation and local Whisper transcription for chunk outputs or deterministic test fixtures.                                            | `whisper-rs`, transcript draft files, optional `RUSTLE_TEST_AUDIO_FILE`.        |
+| `rustle-ai`            | Transcript-to-notes summarisation and fallback note generation.                                                                                        | `llama-cpp-2`, optional Ollama, explicit unsupported hosted-provider fallbacks. |
+| `rustle-storage`       | Saving notes, listing notes/transcripts, and safe deletion inside managed directories.                                                                 | Markdown note files, transcript files, XDG data paths.                          |
+| `rustle-ui`            | Opening notes, transcript drafts, and settings through `xdg-open`, with `$VISUAL` or `$EDITOR` as fallbacks.                                           | Desktop opener/editor process spawning.                                         |
+| `src/notifications.rs` | Desktop notification delivery for major workflow events and user-visible fallbacks.                                                                    | `notify-rust`, freedesktop notifications DBus service.                          |
+| `src/autostart.rs`     | Reconciles XDG autostart or systemd user-service startup artifacts from settings.                                                                      | `~/.config/autostart`, `~/.config/systemd/user`.                                |
+| `src/diagnostics.rs`   | Structured logging to stderr and file plus top-level panic capture.                                                                                    | `tracing`, `tracing-subscriber`, `~/.local/share/rustle/logs/rustle.log`.       |
 
 ## Event bus contract
 
@@ -122,14 +122,14 @@ This keeps feature crates independently testable and lets multiple subscribers r
 
 Rustle is currently file-backed.
 
-| Artifact | Default path | Notes |
-| -------- | ------------ | ----- |
-| Settings | `~/.config/rustle/config.toml` | Saved with owner-only permissions on Unix. |
-| Logs | `~/.local/share/rustle/logs/rustle.log` | Written alongside stderr output. |
-| Recordings | `~/.local/share/rustle/recordings/` | Chunked 16 kHz mono WAV files. |
-| Transcript drafts | `~/.local/share/rustle/transcripts/` | Editable `.txt` drafts. |
-| Notes | `~/.local/share/rustle/notes/` | Saved Markdown meeting notes. |
-| Tray icons | `~/.local/share/rustle/icons/` | Resolved before shared system data dirs. |
+| Artifact          | Default path                            | Notes                                      |
+| ----------------- | --------------------------------------- | ------------------------------------------ |
+| Settings          | `~/.config/rustle/config.toml`          | Saved with owner-only permissions on Unix. |
+| Logs              | `~/.local/share/rustle/logs/rustle.log` | Written alongside stderr output.           |
+| Recordings        | `~/.local/share/rustle/recordings/`     | Chunked 16 kHz mono WAV files.             |
+| Transcript drafts | `~/.local/share/rustle/transcripts/`    | Editable `.txt` drafts.                    |
+| Notes             | `~/.local/share/rustle/notes/`          | Saved Markdown meeting notes.              |
+| Tray icons        | `~/.local/share/rustle/icons/`          | Resolved before shared system data dirs.   |
 
 The settings schema already includes `storage.db_path`, but SQLite-backed note search and storage remain follow-on work; current release behavior does not persist meeting data into a database.
 
@@ -170,7 +170,5 @@ Implemented and release-critical today:
 Deferred or intentionally follow-on:
 
 - Native notes and settings windows
-- SQLite-backed note search/storage
+- SQLite-backed note search/storae
 - Hosted OpenAI and Anthropic production integrations
-- Non-Hyprland desktop support
-- Additional meeting-provider detection beyond the current Teams-focused path

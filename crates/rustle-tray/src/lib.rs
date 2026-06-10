@@ -1138,7 +1138,7 @@ mod tests {
             "team sync",
         )) {
             MenuItem::SubMenu(menu) => menu,
-            _ => panic!("expected note submenu")
+            _ => panic!("expected note submenu"),
         };
 
         let labels = menu.submenu.iter().map(menu_item_label).collect::<Vec<_>>();
@@ -1154,7 +1154,7 @@ mod tests {
             "team sync",
         )) {
             MenuItem::SubMenu(menu) => menu,
-            _ => panic!("expected transcript submenu")
+            _ => panic!("expected transcript submenu"),
         };
 
         let labels = menu.submenu.iter().map(menu_item_label).collect::<Vec<_>>();

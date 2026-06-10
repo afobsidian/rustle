@@ -3,12 +3,12 @@
 use std::collections::HashMap;
 use std::fs as std_fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rustle_core::{
     expand_tilde, resolve_transcripts_dir, safe_filename, tasks::spawn_logged, AppEvent, CoreError,
-    DetectionSource, EventReceiver, EventSender, NotificationUrgency, Settings, TranscriptSegment,
-    TranscriptionMethod,
+    DetectionSource, EventReceiver, EventSender, NotificationUrgency, Settings, StoredDocumentKind,
+    TranscriptSegment, TranscriptionMethod,
 };
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -19,11 +19,16 @@ const WHISPER_SAMPLE_RATE: u32 = 16_000;
 const DEFAULT_WHISPER_REPO: &str = "ggerganov/whisper.cpp";
 const DEFAULT_WHISPER_MODEL_FILE: &str = "ggml-base.en.bin";
 const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
+const MIN_AUTODETECTED_MEETING_DURATION: Duration = Duration::from_secs(300);
 
 struct MeetingTranscript {
     name: String,
     path: PathBuf,
     segments: Vec<TranscriptSegment>,
+    chunk_paths: Vec<PathBuf>,
+    source: DetectionSource,
+    started_at: Instant,
+    ended_at: Option<Instant>,
     test_audio_path: Option<PathBuf>,
     recording_active: bool,
     meeting_ended: bool,
@@ -69,6 +74,10 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                                 name: name.clone(),
                                 path: path.clone(),
                                 segments: Vec::new(),
+                                chunk_paths: Vec::new(),
+                                source,
+                                started_at: Instant::now(),
+                                ended_at: None,
                                 test_audio_path,
                                 recording_active: false,
                                 meeting_ended: false,
@@ -94,23 +103,29 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 }
             }
             Ok(AppEvent::RecordingChunkReady { meeting_id, path }) => {
+                let Some((meeting_name, transcript_path)) = meetings.get_mut(&meeting_id).map(|meeting| {
+                    meeting.chunk_paths.push(path.clone());
+                    (meeting.name.clone(), meeting.path.clone())
+                }) else {
+                    warn!(meeting_id = %meeting_id, path = %path.display(), "recording chunk has no active transcript");
+                    continue;
+                };
+
                 let segments = match transcribe_audio_chunk(path.clone(), settings.clone()).await {
                     Ok(segments) => segments,
                     Err(error) => {
                         warn!(%error, path = %path.display(), "failed to transcribe audio chunk");
-                        if let Some(meeting) = meetings.get(&meeting_id) {
-                            publish(
-                                &event_tx,
-                                transcription_failure_notification(&meeting.name, &error),
-                            );
-                        }
+                        publish(
+                            &event_tx,
+                            transcription_failure_notification(&meeting_name, &error),
+                        );
                         vec![recording_fallback_segment(&path, &error)]
                     }
                 };
 
                 if let Some(meeting) = meetings.get_mut(&meeting_id) {
-                    if let Err(error) = append_segments(&meeting.path, &segments).await {
-                        warn!(%error, path = %meeting.path.display(), "failed to append transcript segments");
+                    if let Err(error) = append_segments(&transcript_path, &segments).await {
+                        warn!(%error, path = %transcript_path.display(), "failed to append transcript segments");
                     }
                     meeting.segments.extend(segments);
                 } else {
@@ -127,6 +142,7 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 };
 
                 meeting.meeting_ended = true;
+                meeting.ended_at = Some(Instant::now());
                 if meeting.recording_active {
                     info!(
                         meeting_id = %id,
@@ -193,9 +209,14 @@ async fn finalise_meeting_transcript(
         return;
     };
 
+    if is_short_hyprland_false_positive(&meeting) {
+        discard_short_hyprland_false_positive(event_tx, meeting_id, &meeting).await;
+        return;
+    }
+
     let mut segments = meeting.segments;
     if segments.is_empty() {
-        if let Some(test_audio_path) = meeting.test_audio_path {
+        if let Some(test_audio_path) = meeting.test_audio_path.clone() {
             segments =
                 transcribe_test_audio(event_tx, &meeting.name, test_audio_path, settings).await;
             if let Err(error) = append_segments(&meeting.path, &segments).await {
@@ -238,6 +259,63 @@ async fn finalise_meeting_transcript(
         },
     );
 }
+
+fn meeting_duration(meeting: &MeetingTranscript) -> Duration {
+    meeting
+        .ended_at
+        .map(|ended_at| ended_at.duration_since(meeting.started_at))
+        .unwrap_or_else(|| meeting.started_at.elapsed())
+}
+
+fn is_short_hyprland_false_positive(meeting: &MeetingTranscript) -> bool {
+    meeting.source == DetectionSource::Hyprland
+        && meeting_duration(meeting) < MIN_AUTODETECTED_MEETING_DURATION
+}
+
+async fn discard_short_hyprland_false_positive(
+    event_tx: &EventSender,
+    meeting_id: Uuid,
+    meeting: &MeetingTranscript,
+) {
+    info!(
+        meeting_id = %meeting_id,
+        meeting = %meeting.name,
+        duration_secs = meeting_duration(meeting).as_secs_f64(),
+        min_duration_secs = MIN_AUTODETECTED_MEETING_DURATION.as_secs(),
+        path = %meeting.path.display(),
+        "discarding short Hyprland detection as false positive"
+    );
+
+    let transcript_deleted = match fs::remove_file(&meeting.path).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            warn!(%error, path = %meeting.path.display(), "failed to remove false-positive transcript draft");
+            false
+        }
+    };
+
+    if transcript_deleted {
+        publish(
+            event_tx,
+            AppEvent::DocumentDeleted {
+                path: meeting.path.clone(),
+                kind: StoredDocumentKind::Transcript,
+            },
+        );
+    }
+
+    for chunk_path in &meeting.chunk_paths {
+        match fs::remove_file(chunk_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                warn!(%error, path = %chunk_path.display(), "failed to remove false-positive recording chunk");
+            }
+        }
+    }
+}
+
 
 async fn create_transcript_draft(meeting_name: &str) -> std::io::Result<PathBuf> {
     let directory = resolve_transcripts_dir()
@@ -888,4 +966,54 @@ mod tests {
         let name = meeting_name_from_path(std::path::Path::new("/tmp/1234567890_meeting"));
         assert_eq!(name, "meeting");
     }
+
+    #[test]
+    fn spec_028_short_hyprland_detection_is_treated_as_false_positive() {
+        let meeting = MeetingTranscript {
+            name: "Short auto-detected meeting".to_owned(),
+            path: PathBuf::from("/tmp/short-auto-detected-meeting.txt"),
+            segments: Vec::new(),
+            chunk_paths: Vec::new(),
+            source: DetectionSource::Hyprland,
+            started_at: Instant::now(),
+            ended_at: Some(Instant::now()),
+            test_audio_path: None,
+            recording_active: false,
+            meeting_ended: true,
+        };
+
+        assert!(is_short_hyprland_false_positive(&meeting));
+    }
+
+    #[test]
+    fn spec_028_manual_and_long_hyprland_meetings_are_not_false_positives() {
+        let manual_meeting = MeetingTranscript {
+            name: "Manual meeting".to_owned(),
+            path: PathBuf::from("/tmp/manual-meeting.txt"),
+            segments: Vec::new(),
+            chunk_paths: Vec::new(),
+            source: DetectionSource::Manual,
+            started_at: Instant::now(),
+            ended_at: Some(Instant::now()),
+            test_audio_path: None,
+            recording_active: false,
+            meeting_ended: true,
+        };
+        assert!(!is_short_hyprland_false_positive(&manual_meeting));
+
+        let long_hyprland_meeting = MeetingTranscript {
+            name: "Long auto-detected meeting".to_owned(),
+            path: PathBuf::from("/tmp/long-auto-detected-meeting.txt"),
+            segments: Vec::new(),
+            chunk_paths: Vec::new(),
+            source: DetectionSource::Hyprland,
+            started_at: Instant::now() - MIN_AUTODETECTED_MEETING_DURATION - Duration::from_secs(1),
+            ended_at: Some(Instant::now()),
+            test_audio_path: None,
+            recording_active: false,
+            meeting_ended: true,
+        };
+        assert!(!is_short_hyprland_false_positive(&long_hyprland_meeting));
+    }
+
 }

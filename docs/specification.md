@@ -623,24 +623,24 @@ Rustle's file-backed workflow should integrate with the desktop opener first, th
 
 ## 5. Test Strategy
 
-| Spec     | Unit / crate-local coverage     | Integration / release-contract coverage | Manual                 |
-| -------- | ------------------------------- | --------------------------------------- | ---------------------- |
-| SPEC-001 | Tray registration mock          | DBus roundtrip test                      | Visual tray check      |
-| SPEC-002 | File write/delete               | Desktop file parse                       | Login smoke test       |
-| SPEC-004 | Detection logic unit tests      | Hyprland socket mock                     | Live Teams call        |
-| SPEC-005 | Audio buffer chunking           | Recorder process handling                | Record + playback      |
-| SPEC-006 | Segment parsing and model-path rules | Deterministic WAV / transcript-fixture flow | Transcribe sample WAV  |
-| SPEC-007 | Prompt construction and fallback-note shaping | Provider fallback contract           | Review generated notes |
-| SPEC-009 | TOML parse/validate             | Config round-trip                        | Settings UI smoke      |
-| SPEC-017 | Detection state transitions     | Socket reconnect / polling fallback      | Hyprland restart smoke |
-| SPEC-018 | Storage safety and fallback notifications | Cross-crate fallback persistence behavior | Failure-path review |
-| SPEC-021 | N/A                             | End-to-end manual workflow contract      | Manual release smoke   |
-| SPEC-022 | Detection title filtering       | False-positive meeting guard             | Teams chat/title review |
-| SPEC-023 | Transcript empty guards         | Empty transcript no-op contract          | Empty-draft smoke      |
-| SPEC-024 | N/A                             | Final recording chunk ordering contract  | End-meeting while recording |
-| SPEC-025 | Open-target selection helpers   | N/A                                      | `open` / `notes` routing smoke |
-| SPEC-026 | Tray menu grouping and document action menus | N/A                            | Review & Edit tray smoke |
-| SPEC-027 | Settings bootstrap and opener command ordering | N/A                            | Settings/opener smoke  |
+| Spec     | Unit / crate-local coverage                    | Integration / release-contract coverage     | Manual                         |
+| -------- | ---------------------------------------------- | ------------------------------------------- | ------------------------------ |
+| SPEC-001 | Tray registration mock                         | DBus roundtrip test                         | Visual tray check              |
+| SPEC-002 | File write/delete                              | Desktop file parse                          | Login smoke test               |
+| SPEC-004 | Detection logic unit tests                     | Hyprland socket mock                        | Live Teams call                |
+| SPEC-005 | Audio buffer chunking                          | Recorder process handling                   | Record + playback              |
+| SPEC-006 | Segment parsing and model-path rules           | Deterministic WAV / transcript-fixture flow | Transcribe sample WAV          |
+| SPEC-007 | Prompt construction and fallback-note shaping  | Provider fallback contract                  | Review generated notes         |
+| SPEC-009 | TOML parse/validate                            | Config round-trip                           | Settings UI smoke              |
+| SPEC-017 | Detection state transitions                    | Socket reconnect / polling fallback         | Hyprland restart smoke         |
+| SPEC-018 | Storage safety and fallback notifications      | Cross-crate fallback persistence behavior   | Failure-path review            |
+| SPEC-021 | N/A                                            | End-to-end manual workflow contract         | Manual release smoke           |
+| SPEC-022 | Detection title filtering                      | False-positive meeting guard                | Teams chat/title review        |
+| SPEC-023 | Transcript empty guards                        | Empty transcript no-op contract             | Empty-draft smoke              |
+| SPEC-024 | N/A                                            | Final recording chunk ordering contract     | End-meeting while recording    |
+| SPEC-025 | Open-target selection helpers                  | N/A                                         | `open` / `notes` routing smoke |
+| SPEC-026 | Tray menu grouping and document action menus   | N/A                                         | Review & Edit tray smoke       |
+| SPEC-027 | Settings bootstrap and opener command ordering | N/A                                         | Settings/opener smoke          |
 
 ---
 

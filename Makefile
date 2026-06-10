@@ -39,6 +39,9 @@ bench-ai:
 	RUSTLE_BENCH_TIMEOUT_SECS=$(BENCH_TIMEOUT_SECS) $(CARGO) run -p rustle-ai --features provider-bench --example provider_bench
 
 fmt:
+	$(CARGO) fmt --all
+
+fmt-check:
 	$(CARGO) fmt --all -- --check
 
 lint:
@@ -75,7 +78,7 @@ rpm: $(RELEASE_BIN)
 	$(CARGO) generate-rpm -o "$(DIST_DIR)/$(BIN)-$(VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm"
 	sha256sum "$(DIST_DIR)/$(BIN)-$(VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm" > "$(DIST_DIR)/$(BIN)-$(VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm.sha256"
 
-ci: fmt lint test build
+ci: fmt-check lint test build
 
 clean:
 	$(CARGO) clean

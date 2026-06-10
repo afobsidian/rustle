@@ -4,11 +4,11 @@ Rust-native desktop meeting notes app for Fedora Linux on Hyprland.
 
 ## Documentation
 
-| Document | Purpose |
-| -------- | ------- |
-| [docs/architecture.md](docs/architecture.md) | Code-aligned software architecture, crate boundaries, event flows, and runtime topology. |
-| [docs/specification.md](docs/specification.md) | Product specification plus implemented release-contract specs. |
-| [docs/devops.md](docs/devops.md) | Local run, validation, release, and smoke-test procedures. |
+| Document                                       | Purpose                                                                                  |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)   | Code-aligned software architecture, crate boundaries, event flows, and runtime topology. |
+| [docs/specification.md](docs/specification.md) | Product specification plus implemented release-contract specs.                           |
+| [docs/devops.md](docs/devops.md)               | Local run, validation, release, and smoke-test procedures.                               |
 
 ## Run Rustle
 
