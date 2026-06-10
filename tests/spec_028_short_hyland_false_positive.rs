@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustle_core::{AppEvent, DetectionSource, EventBus, StoredDocumentKind};
 
 #[tokio::test]
-async fn spec_028_short_hyprland_detection_discards_false_positive_artifacts() -> Result<(), String> {
+async fn spec_028_short_hyprland_detection_discards_false_positive_artifacts() -> Result<(), String>
+{
     let sandbox = unique_sandbox("spec-028-short-hyprland-false-positive");
     let config_home = sandbox.join("config");
     let data_home = sandbox.join("data");
@@ -83,9 +84,9 @@ async fn wait_for_transcript_draft(
 
 async fn wait_for_document_deleted(
     observer: &mut rustle_core::EventReceiver,
-    expected_path: &PathBuf,
+    expected_path: &Path,
 ) -> Result<PathBuf, String> {
-    let expected_path = expected_path.clone();
+    let expected_path = expected_path.to_path_buf();
     wait_for_event(observer, move |event| match event {
         AppEvent::DocumentDeleted { path, kind }
             if *kind == StoredDocumentKind::Transcript && *path == expected_path =>

@@ -103,10 +103,12 @@ async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                 }
             }
             Ok(AppEvent::RecordingChunkReady { meeting_id, path }) => {
-                let Some((meeting_name, transcript_path)) = meetings.get_mut(&meeting_id).map(|meeting| {
-                    meeting.chunk_paths.push(path.clone());
-                    (meeting.name.clone(), meeting.path.clone())
-                }) else {
+                let Some((meeting_name, transcript_path)) =
+                    meetings.get_mut(&meeting_id).map(|meeting| {
+                        meeting.chunk_paths.push(path.clone());
+                        (meeting.name.clone(), meeting.path.clone())
+                    })
+                else {
                     warn!(meeting_id = %meeting_id, path = %path.display(), "recording chunk has no active transcript");
                     continue;
                 };
@@ -315,7 +317,6 @@ async fn discard_short_hyprland_false_positive(
         }
     }
 }
-
 
 async fn create_transcript_draft(meeting_name: &str) -> std::io::Result<PathBuf> {
     let directory = resolve_transcripts_dir()
@@ -1015,5 +1016,4 @@ mod tests {
         };
         assert!(!is_short_hyprland_false_positive(&long_hyprland_meeting));
     }
-
 }

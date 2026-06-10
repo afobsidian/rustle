@@ -412,10 +412,7 @@ fn strip_known_suffixes(value: &str, suffixes: &[&str]) -> Option<String> {
 fn strip_leading_notification_badges(value: &str) -> &str {
     let mut trimmed = value.trim();
 
-    loop {
-        let Some(rest) = trimmed.strip_prefix('(') else {
-            break;
-        };
+    while let Some(rest) = trimmed.strip_prefix('(') {
         let Some((count, suffix)) = rest.split_once(')') else {
             break;
         };
@@ -700,7 +697,9 @@ mod tests {
         assert!(!is_meeting_title_allowed("(1) Calendar | Brent Wallace"));
         assert!(!is_meeting_title_allowed("(1) Activity | Brent Wallace"));
         assert!(!is_meeting_title_allowed("(1) Chat | Justin Gilmour"));
-        assert!(!is_meeting_title_allowed("(1) Chat | Meeting compact view | Krishna Kongara"));
+        assert!(!is_meeting_title_allowed(
+            "(1) Chat | Meeting compact view | Krishna Kongara"
+        ));
         assert!(!is_meeting_title_allowed("Waiting for network..."));
         assert!(!is_meeting_title_allowed("Teams and Channels"));
         assert!(!is_meeting_title_allowed("Microsoft Teams"));
@@ -1160,12 +1159,14 @@ mod tests {
         ] {
             let candidate = select_meeting_candidate(&[client("0xabc", "teams-for-linux", title)]);
             apply_detected_candidate(&event_tx, &mut active_meeting, candidate);
-            assert!(active_meeting.is_none(), "{title} should not activate a meeting");
+            assert!(
+                active_meeting.is_none(),
+                "{title} should not activate a meeting"
+            );
             assert!(
                 matches!(observer.try_recv(), Err(TryRecvError::Empty)),
                 "{title} should not emit MeetingStarted"
             );
         }
     }
-
 }
