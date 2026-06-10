@@ -11,4 +11,5 @@ name: "Rustle Engineering Principles"
 - Avoid `unwrap()` and `expect()` in library code. Return meaningful errors and keep failures observable.
 - Use Tokio for async I/O and `tracing` for logs, spans, and diagnostic events.
 - Keep changes focused on the requested behavior, and call out nearby issues instead of silently expanding scope.
+- Keep `README.md` and `docs/` aligned with code whenever release-contract behavior, supported providers, or operator workflows change.
 - Add or update focused tests when behavior changes, shared contracts move, or regressions would be easy to miss.

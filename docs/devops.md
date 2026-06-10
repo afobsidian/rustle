@@ -9,7 +9,7 @@ Related references:
 
 ## Local run
 
-Run the tray-first v0.1 workflow from the repository root:
+Run Rustle from the repository root:
 
 ```sh
 make run
@@ -19,12 +19,15 @@ Rustle targets Hyprland and starts as a tray app when an SNI host is available. 
 
 - `start [meeting name]`: Starts a manual meeting and logs a draft path.
 - `stop`: Reads the draft, generates notes, and saves.
-- `open`: Opens the current transcript draft during an active meeting when one exists, otherwise the latest saved note, otherwise the notes folder.
+- `open` / `notes`: Opens the current transcript draft during an active meeting when one exists, otherwise the latest saved note, otherwise the notes folder.
 - `transcript`: Opens the latest transcript draft when one exists.
 - `settings`: Opens the TOML settings file in the configured editor.
 - `quit`: Requests graceful application shutdown.
+- `help`: Prints the supported terminal commands.
 
 Rustle opens notes, transcript drafts, and the settings file through `xdg-open` first so the desktop's normal editor association is used, then falls back to `$VISUAL` or `$EDITOR` if needed.
+
+The tray Review & Edit submenu mirrors this file-backed workflow: open the current draft, open the latest note, open notes/transcript folders, re-summarise a saved transcript into a new note, and delete managed notes/transcripts.
 
 Rustle also reconciles start-on-login integration from `~/.config/rustle/config.toml` on startup:
 
@@ -36,13 +39,15 @@ Rustle writes structured diagnostics to stderr and to `~/.local/share/rustle/log
 
 Rustle sends desktop notifications for meeting detection and recording start, saved notes, and transcription or summarisation fallbacks that change what the user should expect. If the desktop notification service is unavailable, Rustle should continue running and log the delivery failure instead of crashing.
 
-The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available. The supported automatic scope for v0.1 is Microsoft Teams desktop windows plus common Teams web titles in Chromium-, Chrome-, and Firefox-based browsers. Calendar, Chat, Calls, Activity, and similar navigation views should not trigger meeting start.
+The manual flow above is the must-pass release path. On Fedora/Hyprland, also validate the automatic Teams-detection path when a tray host is available. The supported automatic scope today is Microsoft Teams desktop windows plus common Teams web titles in Chromium-, Chrome-, and Firefox-based browsers. Calendar, Chat, Calls, Activity, and similar navigation views should not trigger meeting start, and one-to-one chat titles should stay filtered even when they include a Teams suffix.
 
 Local transcription uses `whisper-rs`. When the default `transcription.model_path` is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing. Custom model paths must point to an existing compatible whisper.cpp `ggml` model.
 
 Audio recorder startup and shutdown are bounded for release use. If a recorder backend launches but fails to produce audio beyond the WAV header within the startup timeout, Rustle logs the backend failure, stops that chunk attempt, and avoids leaving a misleading empty chunk behind.
 
-The settings surface may still show `openai` transcription for planned future support, but OpenAI transcription is not supported in v0.1 and should be validated as a clear fallback path rather than a working feature.
+Transcript finalisation is also ordered for release reliability. If `MeetingEnded` arrives while recording is still active, Rustle waits for `RecordingStopped` and the last `RecordingChunkReady` event before publishing `TranscriptionReady`. If a transcript draft is still empty at finalisation, Rustle keeps the draft and skips summarisation/note save instead of generating empty output.
+
+The settings surface may still show `openai` transcription for planned future support, but OpenAI transcription is not supported in the current release scope and should be validated as a clear fallback path rather than a working feature.
 
 The default local AI provider is the llama.cpp backend using a quantized GGUF model. The first run may download model files, and failures still fall back to local Markdown warning notes.
 
@@ -58,7 +63,7 @@ hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 
 Ollama remains available as an optional provider with `provider = "ollama"`. If the configured AI provider fails, Rustle writes fallback notes with the failure reason and keeps the transcript draft separate. A dev container may not expose a Hyprland session or SNI tray host, so validate desktop tray behavior from a Fedora Hyprland session.
 
-The settings surface may still show hosted `openai` and `anthropic` AI providers for planned future support, but they are not supported in v0.1 and should be validated as explicit fallback behavior, not as release-ready integrations.
+The settings surface may still show hosted `openai` and `anthropic` AI providers for planned future support, but they are not supported in the current release scope and should be validated as explicit fallback behavior, not as release-ready integrations.
 
 Benchmark available providers on the current machine with:
 
@@ -75,8 +80,8 @@ Manual smoke test:
 3. Review, edit, or replace the sample text in the draft under `~/.local/share/rustle/transcripts/` and save it.
 4. Enter `stop`.
 5. Confirm a Markdown note appears under `~/.local/share/rustle/notes/`.
-6. While the meeting is active, use `open` to confirm Rustle opens the current transcript draft when one exists.
-7. After `stop`, run `open` again and confirm Rustle opens the latest saved note, or the notes folder when no saved note exists.
+6. While the meeting is active, use `open` or `notes` to confirm Rustle opens the current transcript draft when one exists.
+7. After `stop`, run `open` or `notes` again and confirm Rustle opens the latest saved note, or the notes folder when no saved note exists.
 8. Enter `quit` and confirm the process exits.
 
 Known WAV transcription test:
@@ -86,6 +91,14 @@ Known WAV transcription test:
 3. Enter `start Known WAV Test`.
 4. Enter `stop`; Rustle skips live mic capture and transcribes the configured WAV.
 5. Confirm the transcript draft contains text derived from the WAV and the saved note contains generated meeting notes without embedding the transcript.
+
+Deterministic transcript-fixture test:
+
+1. Prepare a short `.txt` or `.md` file containing transcript text.
+2. Run `RUSTLE_TEST_AUDIO_FILE=/path/to/fixture.txt make run`.
+3. Enter `start Fixture Transcript Test`.
+4. Enter `stop`; Rustle skips live mic capture and loads the text fixture directly through transcript finalisation.
+5. Confirm the transcript draft contains the fixture text and the saved note is generated from that transcript.
 
 Hyprland detection smoke test:
 
@@ -233,11 +246,11 @@ Observed results from that run:
 
 - installed binary: `$sandbox/bin/rustle`
 - installed tray assets: `$sandbox/share/rustle/icons/rustle.svg`, `$sandbox/share/rustle/icons/rustle-recording.svg`
-- release RPM: `dist/rustle-0.1.0-1.x86_64.rpm`
-- RPM checksum file: `dist/rustle-0.1.0-1.x86_64.rpm.sha256`
-- release tarball: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz`
-- tarball checksum file: `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256`
-- checksum verification: `dist/rustle-0.1.0-1.x86_64.rpm: OK`, `dist/rustle-0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK`
+- release RPM: `dist/rustle-0.0.2-1.x86_64.rpm`
+- RPM checksum file: `dist/rustle-0.0.2-1.x86_64.rpm.sha256`
+- release tarball: `dist/rustle-0.0.2-x86_64-unknown-linux-gnu.tar.gz`
+- tarball checksum file: `dist/rustle-0.0.2-x86_64-unknown-linux-gnu.tar.gz.sha256`
+- checksum verification: `dist/rustle-0.0.2-1.x86_64.rpm: OK`, `dist/rustle-0.0.2-x86_64-unknown-linux-gnu.tar.gz: OK`
 
 ## Pipelines
 
@@ -261,5 +274,11 @@ Tests should cite the relevant spec identifier from `docs/specification.md` in t
 | SPEC-017 · Detection State Transitions | `crates/rustle-detection/src/lib.rs` validates start/end transitions, relevant socket event triggers, and polling fallback when the Hyprland socket closes. |
 | SPEC-018 · File-Backed Safety Nets | `crates/rustle-transcription/src/lib.rs`, `crates/rustle-ai/src/lib.rs`, and `crates/rustle-storage/src/lib.rs` validate observable fallbacks, persistence safety, and write/delete failure handling. |
 | SPEC-021 · End-to-End Manual Workflow | `tests/spec_021_manual_workflow.rs` validates the deterministic manual workflow across transcription, AI fallback, storage, and notifications. |
+| SPEC-022 · Teams Chat False-Positive Guard | `crates/rustle-detection/src/lib.rs` validates that chat-style Teams titles stay filtered while real meeting titles still detect. |
+| SPEC-023 · Empty Transcript Guard | `tests/spec_023_empty_transcript.rs` validates that empty drafts do not publish `TranscriptionReady` or trigger summarisation. |
+| SPEC-024 · Final Recording Chunk Ordering | `tests/spec_024_meeting_recording_finalization.rs` validates that transcription waits for the final recording chunk and `RecordingStopped` before finalising the meeting. |
+| SPEC-025 · Current Work Open Routing | `crates/rustle-ui/src/lib.rs` validates transcript-first open routing during active meetings, latest-note routing while idle, and notes-folder fallback when no documents exist. |
+| SPEC-026 · Review & Edit Workflow Menu | `crates/rustle-tray/src/lib.rs` validates workflow-status labels, top-level workflow grouping, review submenu layout, and note/transcript action exposure. |
+| SPEC-027 · Desktop Opener and Settings Bootstrap | `crates/rustle-ui/src/lib.rs` validates settings-file bootstrap, non-file rejection, `xdg-open` ordering, and `$VISUAL` / `$EDITOR` fallback precedence. |
 
 Future feature work should add matching `spec_<id>_*.rs` tests or release-contract tests for new DBus, Hyprland IPC, PipeWire, transcription, AI, and storage behavior described in `docs/specification.md`.

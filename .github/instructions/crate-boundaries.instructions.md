@@ -7,6 +7,7 @@ name: "Rustle Crate Boundaries"
 
 - Keep feature crates decoupled from each other; put shared contracts, events, types, and errors in `rustle-core` when they are truly common.
 - Prefer `rustle-core`'s broadcast event bus for cross-crate coordination instead of direct dependencies between feature crates.
+- When `AppEvent` variants or cross-crate workflow contracts change, update `docs/architecture.md` and `docs/specification.md` in the same change.
 - Avoid adding dependencies from lower-level crates back into UI, tray, AI, audio, storage, detection, or transcription crates.
 - Keep public APIs small, typed, and purpose-specific; avoid exposing implementation details just to simplify one caller.
 - When moving a type or event into `rustle-core`, update tests or examples that validate the shared contract.

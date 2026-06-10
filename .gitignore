@@ -2,3 +2,5 @@
 Cargo.lock
 tmp_root/
 dist/
+.vscode/
+.dirac*

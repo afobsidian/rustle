@@ -12,13 +12,13 @@ Rust-native desktop meeting notes app for Fedora Linux on Hyprland.
 
 ## Run Rustle
 
-Rustle starts as a StatusNotifierItem system tray app on Hyprland with an SNI host such as Waybar. It keeps terminal controls as a fallback when a tray host or D-Bus is unavailable, warns when launched outside Hyprland, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes.
+Rustle starts as a StatusNotifierItem system tray app on Hyprland with an SNI host such as Waybar. It keeps terminal controls as a fallback when a tray host or D-Bus is unavailable, warns when launched outside Hyprland, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes. If a meeting ends while recording is still flushing its last chunk, Rustle waits for that final chunk before publishing the transcript. If a transcript draft is still empty at finalisation, Rustle keeps the draft file and skips note generation instead of producing empty output.
 
 ```sh
 make run
 ```
 
-Tray actions are grouped around the user workflow: meeting controls, review and editing, capture preferences, and provider/configuration. Left-clicking the tray icon and the `open` command now follow the same rule: open the current transcript draft during an active meeting when one exists, otherwise open the latest saved note, otherwise open the notes folder.
+Tray actions are grouped around the user workflow: meeting controls, review and editing, capture preferences, and provider/configuration. Left-clicking the tray icon plus the `open` and `notes` terminal commands follow the same rule: open the current transcript draft during an active meeting when one exists, otherwise open the latest saved note, otherwise open the notes folder. The Review & Edit submenu also exposes recent notes/transcripts, transcript re-summarisation into a new note, and safe deletion inside Rustle-managed directories.
 
 Available fallback terminal commands while Rustle is running:
 
@@ -26,19 +26,20 @@ Available fallback terminal commands while Rustle is running:
 start [meeting name]
 stop
 open
+notes
 transcript
 settings
 quit
 help
 ```
 
-The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, Rustle also ships Hyprland-based Teams detection as the supported automatic path for Microsoft Teams desktop windows and common Teams web titles in browsers such as Chromium, Chrome, and Firefox. Navigation views such as Calendar, Chat, Calls, and Activity are intentionally ignored so they do not start meetings by mistake.
+The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, Rustle also ships Hyprland-based Teams detection as the supported automatic path for Microsoft Teams desktop windows and common Teams web titles in browsers such as Chromium, Chrome, and Firefox. Navigation views such as Calendar, Chat, Calls, and Activity are intentionally ignored so they do not start meetings by mistake, and one-to-one chat titles remain filtered even when they include a Teams suffix.
 
 The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
 
 Recorder startup and shutdown are now bounded for release reliability. If a selected backend launches but does not produce audio bytes within a short startup window, Rustle stops that chunk attempt, logs the backend failure, and avoids publishing an empty chunk downstream.
 
-To test transcription with a known WAV instead of the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting.
+To test transcription without the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting. You can also point `RUSTLE_TEST_AUDIO_FILE` at a `.txt` or `.md` transcript fixture; Rustle loads that text directly for deterministic end-to-end testing.
 
 Rustle opens notes, transcript drafts, and the settings file through `xdg-open` first so the desktop's normal editor association is used, then falls back to `$VISUAL` or `$EDITOR` if needed.
 
@@ -52,7 +53,7 @@ model_path = "~/.local/share/rustle/models/ggml-base.en.bin"
 
 For a custom `transcription.model_path`, download or place a compatible whisper.cpp `ggml` model at that path yourself.
 
-The settings surface still shows `openai` as a transcription option so the planned support shape stays visible, but OpenAI transcription is not supported in v0.1 yet. If selected, Rustle logs a clear warning and instructs you to use local Whisper instead.
+The settings surface still shows `openai` as a transcription option so the planned support shape stays visible, but OpenAI transcription is not supported in the current release scope. If selected, Rustle logs a clear warning and instructs you to use local Whisper instead.
 
 The default AI provider is the local `llama_cpp` backend using a quantized GGUF model. The first run may download model files, and failures still fall back to locally generated Markdown warning notes.
 
@@ -66,7 +67,7 @@ hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
 hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
 ```
 
-Ollama remains available as an optional provider by setting `provider = "ollama"`. The settings surface also keeps `openai` and `anthropic` visible, but those hosted providers are not supported in v0.1 yet. If a hosted provider is selected, Rustle saves fallback notes with the reason instead of failing silently. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
+Ollama remains available as an optional provider by setting `provider = "ollama"`. The settings surface also keeps `openai` and `anthropic` visible, but those hosted providers are not supported in the current release scope. If a hosted provider is selected, Rustle saves fallback notes with the reason instead of failing silently. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. If a meeting ends with no recorded audio or manual transcript text, Rustle keeps the draft and skips note generation rather than saving an empty note. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
 
 Rustle now honors the existing start-on-login settings on Linux. Set `general.start_on_login = true` and choose `general.start_on_login_method = "xdg"` to manage `~/.config/autostart/rustle.desktop`, or `"systemd"` to manage `~/.config/systemd/user/rustle.service` plus its `default.target.wants` symlink. Switching methods cleans up the stale integration path on the next launch.
 
@@ -76,7 +77,7 @@ Rustle also sends desktop notifications for meeting detection and recording star
 
 Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
 
-Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Rustle keeps polling Hyprland clients even when the event socket is temporarily unavailable, and reconnects to the socket automatically after Hyprland restarts so detection can recover without restarting the app. Native notes and settings windows remain follow-on work; v0.1 stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
+Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Rustle keeps polling Hyprland clients even when the event socket is temporarily unavailable, and reconnects to the socket automatically after Hyprland restarts so detection can recover without restarting the app. Native notes and settings windows remain follow-on work; Rustle stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
 
 ## DevOps
 

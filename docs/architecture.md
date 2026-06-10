@@ -1,6 +1,6 @@
 # Rustle software architecture
 
-Rustle is a tray-first, file-backed desktop application for Fedora Linux on Hyprland. The current v0.1 architecture is intentionally modular: the top-level binary wires together small crates, and runtime coordination happens through `rustle-core`'s Tokio broadcast event bus instead of direct feature-crate coupling.
+Rustle is a tray-first, file-backed desktop application for Fedora Linux on Hyprland. The current release architecture is intentionally modular: the top-level binary wires together small crates, and runtime coordination happens through `rustle-core`'s Tokio broadcast event bus instead of direct feature-crate coupling.
 
 ## Design goals
 
@@ -86,7 +86,7 @@ Rustle's main shared contract is `rustle_core::AppEvent`. Instead of calling eac
 - `TranscriptDraftReady` / `TranscriptionReady`
 - `SummarisationReady` / `NoteSaved`
 - `OpenNotesRequested`, `OpenTranscriptRequested`, `OpenSettingsRequested`, `OpenPathRequested`
-- `NotificationRequested`, `DeleteDocumentRequested`, `DocumentDeleted`
+- `NotificationRequested`, `SummariseTranscriptRequested`, `DeleteDocumentRequested`, `DocumentDeleted`
 - `SettingsChanged`, `QuitRequested`
 
 This keeps feature crates independently testable and lets multiple subscribers react to the same workflow transition without introducing reverse dependencies between crates.
@@ -99,10 +99,12 @@ This keeps feature crates independently testable and lets multiple subscribers r
 2. Transcription creates a transcript draft file and publishes `TranscriptDraftReady`.
 3. Audio capture starts automatically only when `meeting.auto_capture = true` and no deterministic test fixture overrides live recording.
 4. Audio chunks publish `RecordingChunkReady`.
-5. Transcription appends transcript segments and publishes `TranscriptionReady` when the meeting ends.
-6. AI summarisation publishes `SummarisationReady`.
-7. Storage writes the Markdown note and publishes `NoteSaved`.
-8. Notifications and UI subscribers react independently to the saved output.
+5. If `MeetingEnded` arrives while recording is still active, transcription marks the meeting as ended and waits for `RecordingStopped`.
+6. When recording is complete, transcription finalises the draft, appends deterministic fixture text when configured, and publishes `TranscriptionReady`.
+7. Empty drafts are preserved but do not publish `TranscriptionReady` or trigger summarisation.
+8. AI summarisation publishes `SummarisationReady`.
+9. Storage writes the Markdown note and publishes `NoteSaved`.
+10. Notifications and UI subscribers react independently to the saved output.
 
 ### Automatic Hyprland detection flow
 
@@ -114,11 +116,11 @@ This keeps feature crates independently testable and lets multiple subscribers r
 
 ### Open/edit flow
 
-`rustle-ui` tracks the latest transcript and note paths from the event stream. `OpenNotesRequested` resolves to the current transcript draft during an active meeting, otherwise to the latest saved note, otherwise to the notes directory. `OpenSettingsRequested` ensures the settings file exists before opening it.
+`rustle-ui` tracks the latest transcript and note paths from the event stream. `OpenNotesRequested` resolves to the current transcript draft during an active meeting when one exists, otherwise to the latest saved note, otherwise to the notes directory. `OpenTranscriptRequested` opens the latest transcript draft directly. `SummariseTranscriptRequested` reloads an existing transcript file, refuses empty transcript text, and reuses the normal AI/storage pipeline to save a new note. `DeleteDocumentRequested` flows through `rustle-storage`, which canonicalises the path and rejects deletes outside Rustle-managed notes/transcripts directories. `OpenSettingsRequested` ensures the settings file exists before opening it.
 
 ## Persistence model
 
-Rustle v0.1 is file-backed.
+Rustle is currently file-backed.
 
 | Artifact | Default path | Notes |
 | -------- | ------------ | ----- |
@@ -139,13 +141,15 @@ Rustle depends on host facilities rather than bundling them:
 - **StatusNotifierItem / DBus** through `ksni` for tray presence.
 - **freedesktop notifications** through `notify-rust`.
 - **Linux recorder binaries** (`pw-record`, `parecord`, `arecord`) for audio capture.
-- **Local Whisper models** for supported transcription in v0.1.
+- **Local Whisper models** for supported transcription in the current release scope.
 - **Local llama.cpp or Ollama** for note generation, with explicit fallback notes when unsupported or unavailable providers are configured.
 
 ## Cross-cutting reliability rules
 
 - Unsupported or unavailable desktop features should degrade to logged warnings, terminal fallback controls, or explicit fallback notes instead of panicking.
 - Transcript drafts remain available even when transcription or summarisation fails.
+- Empty transcript drafts are preserved but do not trigger summarisation.
+- Transcription finalisation waits for `RecordingStopped` after `MeetingEnded` so the last chunk is not lost.
 - Storage operations validate that deletes stay inside Rustle-managed directories.
 - Startup and shutdown of recorder subprocesses are bounded to avoid hanging chunk workers.
 - The process installs a panic hook so unhandled panics are still observable in logs.

@@ -6,6 +6,7 @@ name: "Rustle Testing Guidelines"
 # Rustle Testing Guidelines
 
 - Add focused tests for behavior changes, bug fixes, shared contracts, and regressions that would be easy to reintroduce.
+- Keep `spec_0xx_*` test names and documented spec IDs in sync. If you add or change a release-contract test, update `docs/specification.md` and the traceability table in `docs/devops.md`.
 - Prefer crate-local tests for implementation behavior and integration tests for public cross-crate behavior.
 - Keep tests deterministic and avoid depending on a live Fedora/Hyprland session unless the test is explicitly environment-facing.
 - Use Tokio test utilities for async behavior instead of blocking sleeps or timing-sensitive assertions.

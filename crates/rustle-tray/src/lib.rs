@@ -962,7 +962,8 @@ fn resolve_icon_theme_path_from_candidates(
 #[cfg(test)]
 mod tests {
     use super::{
-        ai_provider_label, document_menu_label, resolve_icon_theme_path_from_candidates,
+        ai_provider_label, document_menu_label, note_document_submenu,
+        resolve_icon_theme_path_from_candidates, transcript_document_submenu,
         transcription_method_label, workflow_status_label, RustleTray,
     };
     use ksni::menu::MenuItem;
@@ -1056,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_status_marks_transcript_during_active_meeting() {
+    fn spec_026_workflow_status_reflects_current_work_target() {
         assert_eq!(
             workflow_status_label(true, true, true),
             "Editing: Current transcript draft"
@@ -1076,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_menu_groups_workflow_before_configuration() {
+    fn spec_026_top_level_menu_groups_workflow_before_configuration() {
         let tray = sample_tray();
         let labels = tray.menu().iter().map(menu_item_label).collect::<Vec<_>>();
 
@@ -1097,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn review_submenu_exposes_current_and_historical_documents() {
+    fn spec_026_review_submenu_exposes_document_actions() {
         let tray = sample_tray();
         let review_menu = tray
             .menu()
@@ -1126,6 +1127,41 @@ mod tests {
                 "Recent _Notes (1)",
                 "Recent _Transcripts (1)",
             ]
+        );
+    }
+
+    #[test]
+    fn spec_026_note_document_submenu_exposes_open_and_delete_actions() {
+        let menu = match note_document_submenu(sample_document(
+            StoredDocumentKind::Note,
+            "team_sync.md",
+            "team sync",
+        )) {
+            MenuItem::SubMenu(menu) => menu,
+            _ => panic!("expected note submenu")
+        };
+
+        let labels = menu.submenu.iter().map(menu_item_label).collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["_Open", "_Delete Permanently"]);
+    }
+
+    #[test]
+    fn spec_026_transcript_document_submenu_exposes_open_summarise_and_delete_actions() {
+        let menu = match transcript_document_submenu(sample_document(
+            StoredDocumentKind::Transcript,
+            "team_sync.txt",
+            "team sync",
+        )) {
+            MenuItem::SubMenu(menu) => menu,
+            _ => panic!("expected transcript submenu")
+        };
+
+        let labels = menu.submenu.iter().map(menu_item_label).collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec!["_Open", "_Summarise To New Note", "_Delete Permanently"]
         );
     }
 }

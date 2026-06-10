@@ -12,13 +12,13 @@
 
 A Rust-native desktop application that sits in the system tray, automatically detects Microsoft Teams meetings, and provides AI-assisted note-taking during those meetings. Built for personal use on a Fedora Linux system running the Hyprland Wayland compositor.
 
-Release scope note: Rustle v0.1 is tray-first and file-backed. The supported paths today are the manual meeting workflow plus Hyprland-based Teams detection on Fedora/Hyprland, local Whisper transcription, `llama_cpp` as the default AI provider, editor or desktop-opener based note/transcript/settings access, desktop notifications, start-on-login reconciliation, and structured logging. Native notes/settings windows and SQLite-backed search remain follow-on work.
+Release scope note: The current release scope is tray-first and file-backed. The supported paths today are the manual meeting workflow plus Hyprland-based Teams detection on Fedora/Hyprland, local Whisper transcription, `llama_cpp` as the default AI provider, editor or desktop-opener based note/transcript/settings access, desktop notifications, start-on-login reconciliation, and structured logging. Native notes/settings windows and SQLite-backed search remain follow-on work.
 
 ---
 
 ## 2. Architecture Overview
 
-Rustle v0.1 uses a tray-first, event-driven architecture. The root binary initialises diagnostics, start-on-login reconciliation, and a shared `rustle-core` broadcast event bus, then wires the tray, detection, audio, transcription, AI, storage, and UI subsystems around that shared contract.
+Rustle currently uses a tray-first, event-driven architecture. The root binary initialises diagnostics, start-on-login reconciliation, and a shared `rustle-core` broadcast event bus, then wires the tray, detection, audio, transcription, AI, storage, and UI subsystems around that shared contract.
 
 See [docs/architecture.md](architecture.md) for the full software architecture reference, including:
 
@@ -95,18 +95,20 @@ X-GNOME-Autostart-enabled=true
 ### SPEC-003 · Tray Icon Menu
 
 **ID:** SPEC-003  
-**Title:** Tray Context Menu  
+**Title:** Workflow Tray Menu  
 **Priority:** P0
 
 #### Description
 
-Right-clicking the tray icon opens a context menu with core actions.
+Right-clicking the tray icon opens a grouped, workflow-first context menu for meeting control, review/edit work, capture preferences, and provider/configuration.
 
 #### Acceptance Criteria
 
-- [x] Menu contains: **Open Notes**, **Current Meeting** (greyed out if none), **Settings**, **Quit**
-- [ ] "Current Meeting" shows active meeting name when a Teams meeting is detected
-- [x] Left-click on tray icon opens the latest saved note, or the notes folder when no notes exist yet
+- [x] Top-level menu groups workflow before configuration: **Current Meeting**, workflow status, **Meeting**, **Review & Edit**, **Capture Preferences**, **Providers & Config**, **Quit**
+- [x] "Current Meeting" shows the active meeting name when a meeting is active, otherwise `None`
+- [x] Left-click on the tray icon plus the `open` and `notes` terminal commands open the current transcript draft during an active meeting when one exists, otherwise the latest saved note, otherwise the notes folder
+- [x] "Review & Edit" exposes current draft, latest note, current work, notes/transcript folder shortcuts, and recent notes/transcripts
+- [x] Recent transcript entries support reopen, re-summarise to a new note, and managed deletion
 - [ ] Menu renders correctly under Hyprland (Waybar SNI support)
 - [ ] All menu items have keyboard-accessible mnemonics
 
@@ -114,12 +116,25 @@ Right-clicking the tray icon opens a context menu with core actions.
 
 ```text
 [Rustle Icon]
-├── 📋 Open Notes
-├── 🎙 Current Meeting: <name or greyed "None">
-├── ──────────────
-├── ⚙  Settings
-└── ✕  Quit
+├── 🎙 Current Meeting: <name or "None">
+├── ✏️ Workflow Status: current transcript draft | latest note | notes folder
+├── 📁 Meeting
+│   ├── Start Manual Meeting
+│   └── Stop Meeting
+├── 📝 Review & Edit
+│   ├── Open Current Draft
+│   ├── Open Latest Note
+│   ├── Open Current Work
+│   ├── Open Notes Folder
+│   ├── Open Transcript Folder
+│   ├── Recent Notes (...)
+│   └── Recent Transcripts (...)
+├── 🎛 Capture Preferences
+├── ⚙ Providers & Config
+└── ✕ Quit
 ```
+
+`Recent Notes` entries support **Open** and **Delete Permanently**. `Recent Transcripts` entries support **Open**, **Summarise To New Note**, and **Delete Permanently**.
 
 ---
 
@@ -190,14 +205,14 @@ When a meeting is detected (and the user has enabled auto-capture), the app capt
 
 Captured audio is transcribed to text, either locally via Whisper or via a remote API.
 
-Release scope note: for v0.1, `local` Whisper is the supported transcription path. The settings surface may still show `openai` so the planned support shape remains visible, but OpenAI transcription is not yet supported in the release build.
+Release scope note: `local` Whisper is the supported transcription path today. The settings surface may still show `openai` so the planned support shape remains visible, but OpenAI transcription is currently unsupported in the release build.
 
 #### Acceptance Criteria
 
 - [ ] Local transcription supported via `whisper-rs` (bundled `ggml` model)
-- [ ] The `openai` transcription setting remains visible for future support, but selecting it must return a clear unsupported warning in v0.1
+- [ ] The `openai` transcription setting remains visible for future support, but selecting it must return a clear unsupported warning in the current release scope
 - [ ] Transcription runs on audio chunks as they complete (streaming-style)
-- [ ] Transcription output stored as timestamped transcript draft files under `~/.local/share/rustle/transcripts/` in v0.1
+- [ ] Transcription output stored as timestamped transcript draft files under `~/.local/share/rustle/transcripts/` in the current release scope
 - [ ] Transcription method configurable: `local` | `openai`
 - [ ] Local model path configurable (default: `~/.local/share/rustle/models/ggml-base.en.bin`)
 - [ ] Errors during transcription logged and surfaced as tray notification; recording continues
@@ -214,7 +229,7 @@ Release scope note: for v0.1, `local` Whisper is the supported transcription pat
 
 Transcription text is passed to an LLM to produce structured meeting notes.
 
-Release scope note: for v0.1, `llama_cpp` is the primary supported provider and `ollama` remains an optional local endpoint path when validated in the target environment. `openai` and `anthropic` may remain visible in settings, but they are not yet supported in the release build and must fall back with a clear warning.
+Release scope note: `llama_cpp` is the primary supported provider today and `ollama` remains an optional local endpoint path when validated in the target environment. `openai` and `anthropic` may remain visible in settings, but they are currently unsupported in the release build and must fall back with a clear warning.
 
 #### Acceptance Criteria
 
@@ -223,8 +238,8 @@ Release scope note: for v0.1, `llama_cpp` is the primary supported provider and 
 - [ ] AI provider configurable: `llama_cpp` (local llama.cpp) | `openai` (GPT-4o) | `anthropic` (Claude) | `ollama` (local)
 - [ ] System prompt configurable by user in settings
 - [ ] Notes saved as Markdown to `~/.local/share/rustle/notes/YYYY-MM-DD_<meeting-name>.md`
-- [ ] Hosted `openai` and `anthropic` providers remain visible but unsupported in v0.1 and must fall back with a clear warning note
-- [ ] SQLite-backed note storage or search remains follow-on work after the file-backed v0.1 release
+- [ ] Hosted `openai` and `anthropic` providers remain visible but unsupported in the current release scope and must fall back with a clear warning note
+- [ ] SQLite-backed note storage or search remains follow-on work after the current file-backed release
 
 ---
 
@@ -238,7 +253,7 @@ Release scope note: for v0.1, `llama_cpp` is the primary supported provider and 
 
 A native window for browsing, searching, and editing past meeting notes.
 
-Release scope note: v0.1 still opens note files or the notes directory through the user's editor or desktop opener. The native Wayland notes window described here remains follow-on work.
+Release scope note: the current release still opens note files or the notes directory through the user's editor or desktop opener. The native Wayland notes window described here remains follow-on work.
 
 #### Acceptance Criteria
 
@@ -265,12 +280,12 @@ Release scope note: v0.1 still opens note files or the notes directory through t
 
 #### Description
 
-All user-configurable options are stored persistently. In v0.1, the tray opens the TOML settings file in the user's editor; a native settings window remains follow-on work.
+All user-configurable options are stored persistently. In the current release scope, the tray opens the TOML settings file in the user's editor; a native settings window remains follow-on work.
 
 #### Acceptance Criteria
 
 - [ ] Settings stored as TOML at `~/.config/rustle/config.toml`
-- [ ] Settings entry is accessible from the tray menu; in v0.1 it opens the TOML file in the configured editor
+- [ ] Settings entry is accessible from the tray menu; in the current release scope it opens the TOML file in the configured editor
 - [ ] All settings have sensible defaults; app works out-of-the-box with no settings changes
 - [ ] Settings are validated on load; invalid values fall back to defaults with a warning log
 
@@ -454,6 +469,148 @@ The manual meeting flow is the must-pass release path. Starting and stopping a m
 
 ---
 
+### SPEC-022 · Teams Chat False-Positive Guard
+
+**ID:** SPEC-022  
+**Title:** Teams Chat False-Positive Guard  
+**Priority:** P1
+
+#### Description
+
+Teams chat or navigation window titles must not start the meeting workflow even if the window class or title still contains Teams branding.
+
+#### Acceptance Criteria
+
+- [x] Titles such as `Chat | User Name` do not produce a meeting candidate
+- [x] Chat titles with a Teams suffix such as `Chat | User Name | Microsoft Teams` still do not publish `MeetingStarted`
+- [x] Real meeting titles such as `Sprint Planning | Microsoft Teams` continue to detect normally
+
+#### Technical Notes
+
+- Title filtering runs before `MeetingStarted` publication
+- This complements the broader navigation-title filter used for Calendar, Chat, Calls, Activity, and similar views
+
+---
+
+### SPEC-023 · Empty Transcript Guard
+
+**ID:** SPEC-023  
+**Title:** Empty Transcript Guard  
+**Priority:** P1
+
+#### Description
+
+When a meeting ends with no recorded speech, no deterministic fixture, and no manual transcript text, Rustle should keep the draft but stop before AI note generation.
+
+#### Acceptance Criteria
+
+- [x] `MeetingStarted` still creates a transcript draft for the meeting
+- [x] Whitespace-only or empty transcript draft content does not publish `TranscriptionReady`
+- [x] No summarisation or note-save path is triggered for that meeting
+
+#### Technical Notes
+
+- Finalisation trims transcript draft content before deciding whether any transcript segments exist
+- This protects the file-backed workflow from generating empty notes
+
+---
+
+### SPEC-024 · Final Recording Chunk Ordering
+
+**ID:** SPEC-024  
+**Title:** Final Recording Chunk Ordering  
+**Priority:** P1
+
+#### Description
+
+Meeting finalisation must not race the recorder. If a meeting ends while recording is still active, Rustle must wait for the final chunk and `RecordingStopped` before publishing transcript output.
+
+#### Acceptance Criteria
+
+- [x] `MeetingEnded` with active recording does not immediately publish `TranscriptionReady`
+- [x] A late final `RecordingChunkReady` event is still included in final transcript output
+- [x] Finalisation proceeds after `RecordingStopped` clears the recording-active state
+
+#### Technical Notes
+
+- The transcription loop tracks `recording_active` and `meeting_ended` per meeting
+- Fallback transcript segments from a failed final chunk still flow through the same finalisation path
+
+---
+
+### SPEC-025 · Current Work Open Routing
+
+**ID:** SPEC-025  
+**Title:** Current Work Open Routing  
+**Priority:** P1
+
+#### Description
+
+The default "open current work" action should route to the most relevant artifact for the user's current workflow state instead of always opening the same directory or file.
+
+#### Acceptance Criteria
+
+- [x] During an active meeting with a transcript draft, the current-work action opens the current transcript draft
+- [x] When no meeting is active and a saved note exists, the current-work action opens the latest saved note
+- [x] When no draft or saved note exists, the current-work action falls back to the notes folder
+- [x] The same routing applies to tray left-click and the terminal `open` / `notes` commands
+
+#### Technical Notes
+
+- Routing is based on the latest transcript and note paths observed on the event stream
+- The selected target also controls whether editor-oriented fallbacks should be attempted after `xdg-open`
+
+---
+
+### SPEC-026 · Review & Edit Workflow Menu
+
+**ID:** SPEC-026  
+**Title:** Review & Edit Workflow Menu  
+**Priority:** P1
+
+#### Description
+
+The tray's review/edit workflow should surface the current draft, latest note, historical documents, and safe follow-up actions without requiring a separate window.
+
+#### Acceptance Criteria
+
+- [x] The top-level tray menu keeps current meeting and workflow status ahead of configuration controls
+- [x] The `Review & Edit` submenu exposes current draft, latest note, current work, notes folder, transcript folder, and recent document submenus
+- [x] Saved note entries expose reopen and delete actions
+- [x] Saved transcript entries expose reopen, summarise-to-new-note, and delete actions
+- [x] When an active meeting has no saved chunk yet, the submenu explains that the transcript draft appears after the first saved chunk
+
+#### Technical Notes
+
+- Menu state is derived from in-memory meeting/doc state plus the configured managed directories
+- Transcript re-summarisation republishes the existing transcript through `SummariseTranscriptRequested`
+
+---
+
+### SPEC-027 · Desktop Opener and Settings Bootstrap
+
+**ID:** SPEC-027  
+**Title:** Desktop Opener and Settings Bootstrap  
+**Priority:** P1
+
+#### Description
+
+Rustle's file-backed workflow should integrate with the desktop opener first, then fall back to editor commands when needed, while also creating a usable settings file on demand.
+
+#### Acceptance Criteria
+
+- [x] Rustle tries `xdg-open` before terminal-editor fallbacks for file-oriented open requests
+- [x] When editor fallback is requested, `$VISUAL` takes precedence over `$EDITOR`
+- [x] Opening settings creates the default config file when it does not already exist
+- [x] If the resolved settings path exists but is not a regular file, Rustle logs a warning and refuses to treat it as an openable settings file
+
+#### Technical Notes
+
+- Open candidates are built as an ordered list of commands for notes, transcripts, settings, and requested paths
+- Settings bootstrap is part of the user-visible open-settings workflow, not a separate install step
+
+---
+
 ## 4. Out of Scope (v1)
 
 - Multi-user / team sync
@@ -478,6 +635,12 @@ The manual meeting flow is the must-pass release path. Starting and stopping a m
 | SPEC-017 | Detection state transitions     | Socket reconnect / polling fallback      | Hyprland restart smoke |
 | SPEC-018 | Storage safety and fallback notifications | Cross-crate fallback persistence behavior | Failure-path review |
 | SPEC-021 | N/A                             | End-to-end manual workflow contract      | Manual release smoke   |
+| SPEC-022 | Detection title filtering       | False-positive meeting guard             | Teams chat/title review |
+| SPEC-023 | Transcript empty guards         | Empty transcript no-op contract          | Empty-draft smoke      |
+| SPEC-024 | N/A                             | Final recording chunk ordering contract  | End-meeting while recording |
+| SPEC-025 | Open-target selection helpers   | N/A                                      | `open` / `notes` routing smoke |
+| SPEC-026 | Tray menu grouping and document action menus | N/A                            | Review & Edit tray smoke |
+| SPEC-027 | Settings bootstrap and opener command ordering | N/A                            | Settings/opener smoke  |
 
 ---
 
@@ -496,4 +659,4 @@ The manual meeting flow is the must-pass release path. Starting and stopping a m
 11. **SPEC-011** – Hyprland deep integration
 12. **SPEC-012** – Hardening pass
 
-Later release-contract specs such as **SPEC-017**, **SPEC-018**, and **SPEC-021** extend the original roadmap with hardening and end-to-end validation expectations for the current v0.1 architecture.
+Later specs such as **SPEC-017** through **SPEC-027** extend the original roadmap with hardening and workflow-alignment expectations for the current architecture.

@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creates_missing_settings_file() {
+    async fn spec_027_missing_settings_file_is_created_before_open() {
         let temp_root = unique_temp_path("rustle-ui-test");
         let path = temp_root.join("config.toml");
 
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_settings_path_that_is_not_a_file() {
+    async fn spec_027_settings_path_must_be_regular_file() {
         let temp_root = unique_temp_path("rustle-ui-test");
         tokio::fs::create_dir_all(&temp_root).await.unwrap();
 
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_command_uses_visual_before_editor() {
+    fn spec_027_visual_takes_precedence_over_editor_fallback() {
         let original_visual = std::env::var_os("VISUAL");
         let original_editor = std::env::var_os("EDITOR");
         std::env::set_var("VISUAL", "nvim -f");
@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn open_commands_prefer_xdg_open_before_terminal_editor() {
+    fn spec_027_xdg_open_is_tried_before_editor_fallback() {
         let original_visual = std::env::var_os("VISUAL");
         let original_editor = std::env::var_os("EDITOR");
         std::env::set_var("VISUAL", "nvim -f");
@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn open_notes_prefers_transcript_while_meeting_is_active() {
+    fn spec_025_open_routes_to_current_transcript_during_active_meeting() {
         let transcript = PathBuf::from("/tmp/current-transcript.txt");
         let note = PathBuf::from("/tmp/latest-note.md");
         let notes_dir = Path::new("/tmp/notes");
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn open_notes_prefers_latest_note_when_meeting_is_idle() {
+    fn spec_025_open_routes_to_latest_note_when_meeting_is_idle() {
         let transcript = PathBuf::from("/tmp/current-transcript.txt");
         let note = PathBuf::from("/tmp/latest-note.md");
         let notes_dir = Path::new("/tmp/notes");
@@ -384,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn open_notes_falls_back_to_notes_folder_without_documents() {
+    fn spec_025_open_falls_back_to_notes_folder_without_documents() {
         let notes_dir = Path::new("/tmp/notes");
 
         let target = select_notes_open_target(false, None, None, notes_dir);
