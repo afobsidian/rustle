@@ -85,15 +85,8 @@ def main(target="all"):
         run("tar", "-czf", str(source), "--null", "-T", "-", input=paths, cwd=REPO)
         with source.open("rb") as stream:
             run(*ssh, "tar -xzf - -C /work/rustle", stdin=stream)
-        obsidian = Path(os.environ.get("OBSIDIAN_BLUE_DIR", str(REPO.parent / "obsidian-blue")))
-        for name in ("files/scripts/install-rustle.sh", "files/scripts/rustle-version.env",
-                     "files/usr/bin/obsidian-blue-teams",
-                     "files/usr/share/applications/com.github.IsmaelMartinez.teams_for_linux.desktop"):
-            remote = "/work/obsidian-blue/" + name
-            with (obsidian / name).open("rb") as stream:
-                run(*ssh, f"mkdir -p {shlex.quote(str(Path(remote).parent))} && cat > {shlex.quote(remote)}", stdin=stream)
         env = {"CONTAINER_ENGINE": "podman", "RUSTLE_DESKTOP_ARTIFACTS": "/mnt/artifacts",
-               "RUSTLE_DESKTOP_MODELS": "/mnt/models", "OBSIDIAN_BLUE_DIR": "/work/obsidian-blue",
+               "RUSTLE_DESKTOP_MODELS": "/mnt/models",
                "RUSTLE_VIRTUAL_GPU": "1"}
         if archive:
             assert target == "obsidian-blue", "an image archive is only valid for the installed-image gate"

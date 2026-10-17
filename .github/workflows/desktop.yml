@@ -34,13 +34,7 @@ jobs:
         with:
           path: target/desktop-vm/base.img
           key: rustle-desktop-vm-2f119f50
-      - uses: actions/checkout@v4.2.2
-        with:
-          repository: afobsidian/obsidian-blue
-          path: target/obsidian-blue
       - name: Run required installed desktop tests
-        env:
-          OBSIDIAN_BLUE_DIR: ${{ github.workspace }}/target/obsidian-blue
         run: |
           # Reclaim unused SDKs on this disposable hosted runner for the image/VM.
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL

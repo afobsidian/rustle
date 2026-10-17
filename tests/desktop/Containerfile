@@ -32,8 +32,6 @@ RUN source /etc/os-release; \
 COPY --from=build /candidate /candidate
 COPY scripts/verify-install.py scripts/package-arch.sh /opt/rustle-test/
 COPY tests/desktop /opt/rustle-test/desktop
-COPY --from=obsidian files/scripts/install-rustle.sh files/scripts/rustle-version.env /opt/obsidian-installer/
-COPY --from=obsidian files/usr/bin/obsidian-blue-teams files/usr/share/applications/com.github.IsmaelMartinez.teams_for_linux.desktop /opt/obsidian-installer/
 RUN useradd -m -u 1000 tester; \
     printf 'account required pam_permit.so\nsession required pam_systemd.so\n' >/etc/pam.d/rustle-test; \
     source /etc/os-release; \
@@ -44,11 +42,6 @@ RUN useradd -m -u 1000 tester; \
       cp /tmp/rustle-package/*.pkg.tar.zst /candidate/; \
     else \
       dnf -y install /candidate/rustle.rpm; \
-    fi; \
-    if [[ -x /usr/bin/obsidian-blue-quattro-session ]]; then \
-      RUSTLE_CANDIDATE_DIR=/candidate bash /opt/obsidian-installer/install-rustle.sh; \
-      install -Dm755 /opt/obsidian-installer/obsidian-blue-teams /usr/bin/obsidian-blue-teams; \
-      install -Dm644 /opt/obsidian-installer/com.github.IsmaelMartinez.teams_for_linux.desktop /usr/share/applications/com.github.IsmaelMartinez.teams_for_linux.desktop; \
     fi; \
     install -d -m 0755 /artifacts /models; \
     chown -R tester:tester /artifacts /models; \

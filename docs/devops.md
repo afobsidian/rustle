@@ -22,7 +22,7 @@ obsidian-blue checkout must contain the new installer, including for candidate
 validation before a release is published:
 
 ```sh
-OBSIDIAN_BLUE_DIR=/path/to/obsidian-blue make test-desktop
+make test-desktop
 make test-desktop DESKTOP_TARGET=fedora
 make test-desktop DESKTOP_TARGET=arch
 make test-desktop DESKTOP_TARGET=obsidian-blue

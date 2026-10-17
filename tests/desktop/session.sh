@@ -68,13 +68,7 @@ else
 fi
 RUSTLE_TEST_TEAMS_SERVICE=/opt/rustle-test/desktop/teams-service.py rustle setup > /artifacts/setup.log 2>&1
 rustle self-test > /artifacts/manual-self-test.log 2>&1
-if [[ "$RUSTLE_DESKTOP_TARGET" == obsidian-blue ]]; then
-  test -x /usr/bin/obsidian-blue-teams
-  desktop-file-validate /usr/share/applications/com.github.IsmaelMartinez.teams_for_linux.desktop
-  /usr/bin/obsidian-blue-teams >/artifacts/teams.log 2>&1 &
-else
-  flatpak run "$teams_ref" >/artifacts/teams.log 2>&1 &
-fi
+flatpak run "$teams_ref" >/artifacts/teams.log 2>&1 &
 teams_ready=false
 for attempt in $(seq 1 300); do
   if busctl --user --timeout=1 call com.github.IsmaelMartinez.teams_for_linux /com/github/IsmaelMartinez/teams_for_linux \

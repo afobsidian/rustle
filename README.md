@@ -112,10 +112,9 @@ notifications, and the required Teams Flatpak API. Synthetic protocol tests cove
 call lifecycle; authenticated Microsoft calls are outside this gate. Release
 publishing depends on every gate passing; missing required services fail the job.
 
-obsidian-blue installs the pinned release, verifies and records its checksum,
-adds the required Teams Flatpak, and starts Rustle with the UWSM graphical
-session. Its Teams launcher selects an installed branch meeting the minimum
-version. Existing `start_on_login = false` is respected. Other installations can
+obsidian-blue installs the pinned release, verifies its checksum, and starts
+Rustle with the graphical session. Install a Teams Flatpak meeting the minimum
+version separately. Existing `start_on_login = false` is respected. Other installations can
 enable the supplied `rustle.service`; a bare Hyprland session can launch `rustle`
 from its own startup configuration without depending on UWSM.
 

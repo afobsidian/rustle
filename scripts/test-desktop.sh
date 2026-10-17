@@ -29,11 +29,8 @@ if [[ -n "${RUSTLE_IMAGE_UNDER_TEST:-}" ]]; then
   containerfile="$repo/tests/desktop/Installed.Containerfile"
   installed=true
 fi
-obsidian="${OBSIDIAN_BLUE_DIR:-$repo/../obsidian-blue}"
-test -f "$obsidian/files/scripts/install-rustle.sh"
-sha256sum "$obsidian/files/scripts/install-rustle.sh" "$obsidian/files/scripts/rustle-version.env" >"$artifacts/obsidian-source.sha256"
 "$engine" build "${build_flags[@]}" -f "$containerfile" --build-arg "BUILD_IMAGE=$BUILD_IMAGE" \
-  --build-context "obsidian=$obsidian" --build-arg "BASE_IMAGE=$base" -t "$image" "$repo" >"$artifacts/build.log" 2>&1
+  --build-arg "BASE_IMAGE=$base" -t "$image" "$repo" >"$artifacts/build.log" 2>&1
 container="$("$engine" run -d "${run_flags[@]}" --privileged --cgroupns=private --tmpfs /run --tmpfs /tmp --tmpfs /dev/snd \
   -v "$artifacts:/artifacts:rw" -v "$models:/models:rw" "$image")"
 trap '"$engine" exec "$container" journalctl --no-pager >"$artifacts/session-journal.log" 2>&1 || true; "$engine" exec "$container" chmod -R a+rX /artifacts 2>/dev/null || true; "$engine" logs "$container" >"$artifacts/container.log" 2>&1; "$engine" rm -f "$container" >/dev/null' EXIT
