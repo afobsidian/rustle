@@ -87,7 +87,7 @@ async fn notes_open_loop(mut event_rx: EventReceiver) {
             }) => {
                 open_path(&path, prefer_editor, "requested path").await;
             }
-            Ok(AppEvent::QuitRequested) => break,
+            Ok(AppEvent::ShutdownComplete) => break,
             Ok(_) => {}
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                 warn!(skipped, "notes UI loop lagged behind event bus");
@@ -266,6 +266,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+    static EDITOR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
         let timestamp = SystemTime::now()
@@ -300,6 +301,7 @@ mod tests {
 
     #[test]
     fn spec_027_visual_takes_precedence_over_editor_fallback() {
+        let _guard = EDITOR_ENV.lock().unwrap();
         let original_visual = std::env::var_os("VISUAL");
         let original_editor = std::env::var_os("EDITOR");
         std::env::set_var("VISUAL", "nvim -f");
@@ -329,6 +331,7 @@ mod tests {
 
     #[test]
     fn spec_027_xdg_open_is_tried_before_editor_fallback() {
+        let _guard = EDITOR_ENV.lock().unwrap();
         let original_visual = std::env::var_os("VISUAL");
         let original_editor = std::env::var_os("EDITOR");
         std::env::set_var("VISUAL", "nvim -f");

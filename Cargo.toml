@@ -30,7 +30,7 @@ uuid = { version = "1.8.0", features = ["v4", "serde"] }
 
 [package]
 name = "rustle"
-version = "0.0.2"
+version = "0.0.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -39,6 +39,10 @@ repository = "https://github.com/afobsidian/rustle"
 homepage = "https://github.com/afobsidian/rustle"
 
 [dependencies]
+nix = { version = "0.27", features = ["fs"] }
+serde_json.workspace = true
+sha2 = "0.10"
+uuid.workspace = true
 anyhow.workspace = true
 notify-rust = "4.11.7"
 rustle-ai = { path = "crates/rustle-ai", features = ["provider-llama-cpp"] }
@@ -63,4 +67,22 @@ assets = [
     { source = "target/release/rustle", dest = "/usr/bin/rustle", mode = "755" },
     { source = "assets/icons/rustle.svg", dest = "/usr/share/rustle/icons/rustle.svg", mode = "644" },
     { source = "assets/icons/rustle-recording.svg", dest = "/usr/share/rustle/icons/rustle-recording.svg", mode = "644" },
+    { source = "assets/icons/rustle.svg", dest = "/usr/share/icons/hicolor/scalable/apps/rustle.svg", mode = "644" },
+    { source = "assets/rustle.desktop", dest = "/usr/share/applications/rustle.desktop", mode = "644" },
+    { source = "assets/rustle.service", dest = "/usr/lib/systemd/user/rustle.service", mode = "644" },
 ]
+
+[package.metadata.generate-rpm.requires]
+pipewire-utils = "*"
+pipewire-pulseaudio = "*"
+wireplumber = "*"
+pulseaudio-utils = "*"
+hyprland = "*"
+systemd = "*"
+python3 = "*"
+curl = "*"
+xdg-utils = "*"
+"libstdc++" = "*"
+libgomp = "*"
+flatpak = "*"
+dbus-daemon = "*"

@@ -15,9 +15,12 @@ async fn spec_023_empty_transcript_does_not_trigger_summarisation() -> Result<()
         .await
         .map_err(|e| format!("config directory creation failed: {e}"))?;
 
-    tokio::fs::write(&config_path, "[ai]\nprovider = 'openai'\n")
-        .await
-        .map_err(|e| format!("config write failed: {e}"))?;
+    tokio::fs::write(
+        &config_path,
+        "[meeting]\nauto_capture = false\n[ai]\nprovider = 'openai'\n",
+    )
+    .await
+    .map_err(|e| format!("config write failed: {e}"))?;
 
     let previous_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
     let previous_xdg_data_home = std::env::var_os("XDG_DATA_HOME");
@@ -68,6 +71,8 @@ async fn spec_023_empty_transcript_does_not_trigger_summarisation() -> Result<()
     // End the meeting without any recording chunks
     bus.publish(AppEvent::MeetingEnded { id: meeting_id })
         .expect("meeting end should publish");
+    bus.publish(AppEvent::RecordingStopped { meeting_id })
+        .unwrap();
 
     // Wait a short time to ensure no TranscriptionReady is published
     let no_transcription = tokio::time::timeout(Duration::from_secs(2), async {

@@ -25,7 +25,8 @@ fn spec_009_defaults_match_persistent_settings_schema() {
         RecordingDetectionMethod::Hyprland
     );
     assert_eq!(settings.audio.input_device, "default");
-    assert!(!settings.audio.capture_loopback);
+    assert!(settings.audio.capture_loopback);
+    assert_eq!(settings.audio.output_device, "default");
     assert_eq!(settings.audio.max_recording_size_mb, 2048);
     assert_eq!(settings.audio.chunk_duration_minutes, 10);
     assert_eq!(settings.transcription.method, TranscriptionMethod::Local);

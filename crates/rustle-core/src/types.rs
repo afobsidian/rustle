@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 /// Source that detected a meeting state change.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DetectionSource {
+    /// Teams for Linux reported an active call over session D-Bus.
+    TeamsDbus,
     /// A Hyprland window or IPC event indicated a meeting.
     Hyprland,
     /// The user manually created or controlled the meeting state.

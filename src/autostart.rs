@@ -32,7 +32,8 @@ impl AutostartPaths {
     }
 
     fn systemd_wants_dir(&self) -> PathBuf {
-        self.config_home.join("systemd/user/default.target.wants")
+        self.config_home
+            .join("systemd/user/graphical-session.target.wants")
     }
 
     fn systemd_wants_path(&self) -> PathBuf {
@@ -120,7 +121,7 @@ fn desktop_entry_contents(executable: &Path) -> String {
             "Version=1.0\n",
             "Name=Rustle\n",
             "Comment=Tray-first meeting notes app\n",
-            "Exec={}\n",
+            "Exec=\"{}\" --session\n",
             "Terminal=false\n",
             "X-GNOME-Autostart-enabled=true\n"
         ),
@@ -132,14 +133,17 @@ fn systemd_unit_contents(executable: &Path) -> String {
     format!(
         concat!(
             "[Unit]\n",
-            "Description=Rustle tray application\n\n",
+            "Description=Rustle tray application\n",
+            "PartOf=graphical-session.target\n",
+            "After=graphical-session-pre.target pipewire.service wireplumber.service\n\n",
             "[Service]\n",
             "Type=simple\n",
-            "ExecStart={}\n",
+            "ExecStart=\"{}\" --session\n",
             "Restart=on-failure\n",
-            "RestartSec=5\n\n",
+            "RestartSec=5\n",
+            "TimeoutStopSec=620\n\n",
             "[Install]\n",
-            "WantedBy=default.target\n"
+            "WantedBy=graphical-session.target\n"
         ),
         executable.display()
     )
@@ -203,7 +207,7 @@ mod tests {
             .unwrap();
         assert!(desktop_entry.contains("Type=Application"));
         assert!(desktop_entry.contains("Name=Rustle"));
-        assert!(desktop_entry.contains(&format!("Exec={}", executable.display())));
+        assert!(desktop_entry.contains(&format!("Exec=\"{}\" --session", executable.display())));
         assert!(!paths.systemd_unit_path().exists());
         assert!(!paths.systemd_wants_path().exists());
         let _ = fs::remove_dir_all(&temp_root).await;
@@ -223,7 +227,7 @@ mod tests {
 
         let unit_file = fs::read_to_string(paths.systemd_unit_path()).await.unwrap();
         assert!(unit_file.contains("[Service]"));
-        assert!(unit_file.contains(&format!("ExecStart={}", executable.display())));
+        assert!(unit_file.contains(&format!("ExecStart=\"{}\" --session", executable.display())));
 
         let symlink_target = fs::read_link(paths.systemd_wants_path()).await.unwrap();
         assert_eq!(symlink_target, paths.systemd_unit_path());

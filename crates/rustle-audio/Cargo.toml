@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+serde_json.workspace = true
+hound = "3.5.1"
 nix = { version = "0.27", features = ["signal"] }
 rustle-core = { path = "../rustle-core" }
 tokio.workspace = true

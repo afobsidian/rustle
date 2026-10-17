@@ -73,6 +73,13 @@ pub enum AppEvent {
         /// Timestamped transcript segments.
         segments: Vec<TranscriptSegment>,
     },
+    /// A saved transcript is being processed without starting audio capture.
+    TranscriptImported {
+        /// Processing identifier.
+        meeting_id: Uuid,
+        /// Display name.
+        name: String,
+    },
     /// AI-generated notes are ready for a meeting.
     SummarisationReady {
         /// Meeting identifier associated with the notes.
@@ -136,9 +143,25 @@ pub enum AppEvent {
         path: PathBuf,
     },
     /// Settings have changed and should be reloaded by subscribers.
-    SettingsChanged(Settings),
-    /// The application should shut down.
+    SettingsChanged(Box<Settings>),
+    /// A workflow stage failed; retained files remain available for recovery.
+    WorkflowFailed {
+        /// Associated meeting.
+        meeting_id: Uuid,
+        /// Stage that failed.
+        stage: String,
+        /// Actionable error.
+        message: String,
+    },
+    /// All processing for a meeting has completed, successfully or otherwise.
+    MeetingFinished {
+        /// Completed meeting.
+        meeting_id: Uuid,
+    },
+    /// Stop accepting work and finish active meetings.
     QuitRequested,
+    /// Pending work has drained; background components may exit.
+    ShutdownComplete,
 }
 
 /// Thin wrapper around a Tokio broadcast channel for application events.

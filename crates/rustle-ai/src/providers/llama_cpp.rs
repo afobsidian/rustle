@@ -69,7 +69,7 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
     }
 
     let user_prompt = format!(
-        "Create meeting notes from this transcript. Return Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees. Keep each section concise and factual. Do not infer topics, decisions, attendees, or action items that are not explicitly present in the transcript. Ignore icebreakers, jokes, setup chatter, and social examples unless they create a real decision or action item. Use 'None captured.' for Key Decisions or Action Items when none are explicit. For action items, include owner and timing only when stated. Do not include any Transcript section or transcript breakdown.\n\nTranscript:\n{}",
+        "Create meeting notes from this transcript. Return Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees. Keep each section concise and factual. Do not infer topics, decisions, attendees, or action items that are not explicitly present in the transcript. Explicit approvals and agreements are decisions: include them under Key Decisions, even when also mentioned in Summary. Ignore icebreakers, jokes, setup chatter, non-speech annotations, and social examples unless they create a real decision or action item. Use 'None captured.' for Key Decisions or Action Items only when none are explicit. For action items, include owner and timing only when stated. Do not include any Transcript section or transcript breakdown.\n\nTranscript:\n{}",
         transcript.trim()
     );
 
@@ -81,9 +81,8 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
         .map_err(|error| error.to_string())?;
     let prompt = render_prompt(&model, settings.ai.system_prompt.trim(), &user_prompt)?;
 
-    let prompt_tokens = model
-        .str_to_token(&prompt, llama_cpp_2::model::AddBos::Never)
-        .map_err(|error| error.to_string())?;
+    let vocab = model.vocab();
+    let prompt_tokens = vocab.tokenize(prompt.as_bytes(), false, true);
     let prompt_token_count =
         i32::try_from(prompt_tokens.len()).map_err(|error| error.to_string())?;
     let context_token_count = i32::try_from(CONTEXT_TOKENS).map_err(|error| error.to_string())?;
@@ -96,7 +95,8 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
 
     let batch_tokens = prompt_tokens.len().max(MIN_BATCH_TOKENS);
     let n_batch = u32::try_from(batch_tokens).map_err(|error| error.to_string())?;
-    let n_ctx = NonZeroU32::new(CONTEXT_TOKENS)
+    // Allocate for this meeting, rather than a full 32K cache for a short call.
+    let n_ctx = NonZeroU32::new((target_len as u32 + 1).max(2_048))
         .ok_or_else(|| "invalid llama.cpp context size".to_owned())?;
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(Some(n_ctx))
@@ -116,28 +116,31 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
     ctx.decode(&mut batch).map_err(|error| error.to_string())?;
 
     let mut decoder = encoding_rs::UTF_8.new_decoder();
+    // Keep required sections present without penalising repeated facts or deadlines.
+    let grammar = r##"root ::= "# Meeting Notes\n\n## Summary\n" section "\n## Key Decisions\n" section "\n## Action Items\n" section "\n## Attendees\n" section
+section ::= [^\x00#]+
+"##;
     let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::penalties(64, 1.15, 0.0, 0.0),
-        LlamaSampler::top_k(40),
-        LlamaSampler::top_p(0.9, 1),
-        LlamaSampler::temp(0.7),
-        LlamaSampler::dist(1234),
+        LlamaSampler::grammar(&model, grammar, "root").map_err(|error| error.to_string())?,
+        LlamaSampler::greedy(),
     ]);
     let mut output = String::new();
     let mut current_tokens = batch.n_tokens();
 
     while current_tokens <= target_len {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        sampler.accept(token);
+        // llama_sampler_sample already accepts the selected token into the grammar.
 
-        if model.is_eog_token(token) {
+        if vocab.is_eog(token) {
             break;
         }
 
-        let piece = model
-            .token_to_piece(token, &mut decoder, true, None)
-            .map_err(|error| error.to_string())?;
-        output.push_str(&piece);
+        let piece = vocab.token_to_piece(token, true, None);
+        output.reserve(piece.len() * 3 + 4);
+        let (_, consumed, invalid) = decoder.decode_to_string(&piece, &mut output, false);
+        if invalid || consumed != piece.len() {
+            return Err("model produced invalid UTF-8".to_owned());
+        }
 
         batch.clear();
         batch

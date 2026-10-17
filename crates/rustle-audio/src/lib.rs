@@ -1,5 +1,7 @@
 //! Audio capture crate for Rustle.
 
+pub mod pipewire;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,18 +21,23 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RECORDER_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const RECORDER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CHUNK_DURATION_SECS: u64 = 24 * 60 * 60;
-const MAX_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
+// Keep RIFF WAV chunks below the format's 32-bit data-size limit.
+const MAX_CHUNK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
 
 struct ActiveRecording {
     meeting_id: Uuid,
     stop_tx: mpsc::Sender<()>,
+    worker: tokio::task::JoinHandle<()>,
 }
 
 struct CaptureConfig {
     meeting_id: Uuid,
     meeting_name: String,
     input_device: String,
+    output_device: String,
+    capture_loopback: bool,
+    recording_started: bool,
     chunk_duration: Duration,
     max_chunk_bytes: u64,
     event_tx: EventSender,
@@ -66,18 +73,21 @@ async fn audio_capture_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
     loop {
         match event_rx.recv().await {
             Ok(AppEvent::MeetingStarted { id, name, .. }) => {
-                if active.is_some() {
-                    warn!("audio capture already has an active meeting");
-                    continue;
+                if let Some(previous) = active.take() {
+                    let previous_id = previous.meeting_id;
+                    stop_recording(previous).await;
+                    publish(&event_tx, AppEvent::MeetingEnded { id: previous_id });
                 }
                 if test_audio_file_configured() {
                     info!(meeting = %name, env = TEST_AUDIO_FILE_ENV, "test audio fixture configured; skipping live audio capture");
+                    publish(&event_tx, AppEvent::RecordingStopped { meeting_id: id });
                     continue;
                 }
 
                 let settings = load_settings("audio capture").await;
                 if !settings.meeting.auto_capture {
                     info!(meeting = %name, "auto audio capture disabled");
+                    publish(&event_tx, AppEvent::RecordingStopped { meeting_id: id });
                     continue;
                 }
 
@@ -119,16 +129,20 @@ fn start_recording(
         meeting_id,
         meeting_name,
         input_device: settings.audio.input_device,
+        output_device: settings.audio.output_device,
+        capture_loopback: settings.audio.capture_loopback,
+        recording_started: false,
         chunk_duration: chunk_duration(settings.audio.chunk_duration_minutes),
         max_chunk_bytes: recording_size_bytes(settings.audio.max_recording_size_mb),
         event_tx,
     };
 
-    spawn_logged("audio-recording-worker", record_audio_loop(config, stop_rx));
+    let worker = tokio::spawn(record_audio_loop(config, stop_rx));
 
     ActiveRecording {
         meeting_id,
         stop_tx,
+        worker,
     }
 }
 
@@ -136,144 +150,170 @@ async fn stop_recording(recording: ActiveRecording) {
     if recording.stop_tx.send(()).await.is_err() {
         warn!(meeting_id = %recording.meeting_id, "audio capture worker already stopped");
     }
+    if let Err(error) = recording.worker.await {
+        warn!(%error, "recording worker failed");
+    }
 }
 
-async fn record_audio_loop(config: CaptureConfig, mut stop_rx: mpsc::Receiver<()>) {
-    let backend = match select_recorder_backend() {
-        Some(backend) => backend,
-        None => {
-            warn!("no supported Linux audio recorder found; install PipeWire, PulseAudio, or ALSA recording tools");
-            return;
-        }
-    };
-    let directory = match default_data_dir() {
-        Ok(path) => path.join("recordings"),
-        Err(error) => {
-            warn!(%error, "failed to resolve recordings directory");
-            return;
-        }
-    };
-    if let Err(error) = fs::create_dir_all(&directory).await {
-        warn!(%error, path = %directory.display(), "failed to create recordings directory");
-        return;
+async fn record_audio_loop(mut config: CaptureConfig, mut stop_rx: mpsc::Receiver<()>) {
+    if let Err(error) = capture(&mut config, &mut stop_rx).await {
+        warn!(%error, "audio capture failed; recording retained");
+        publish(
+            &config.event_tx,
+            AppEvent::WorkflowFailed {
+                meeting_id: config.meeting_id,
+                stage: "recording".to_owned(),
+                message: error,
+            },
+        );
     }
-
-    publish(
-        &config.event_tx,
-        AppEvent::RecordingStarted {
-            meeting_id: config.meeting_id,
-        },
-    );
-    info!(
-        meeting_id = %config.meeting_id,
-        backend = ?backend,
-        "audio recording started"
-    );
-
-    let mut chunk_index = 1_u64;
-    loop {
-        let path = chunk_path(&directory, &config.meeting_name, chunk_index);
-        let stopped = match record_chunk(&config, backend, &path, &mut stop_rx).await {
-            Ok(stopped) => stopped,
-            Err(error) => {
-                warn!(%error, path = %path.display(), "failed to record audio chunk");
-                true
-            }
-        };
-
-        if file_has_audio(&path).await {
-            publish(
-                &config.event_tx,
-                AppEvent::RecordingChunkReady {
-                    meeting_id: config.meeting_id,
-                    path,
-                },
-            );
-        } else if let Err(error) = fs::remove_file(&path).await {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                warn!(%error, path = %path.display(), "failed to remove empty recording chunk");
-            }
-        }
-
-        if stopped {
-            break;
-        }
-        chunk_index += 1;
-    }
-
     publish(
         &config.event_tx,
         AppEvent::RecordingStopped {
             meeting_id: config.meeting_id,
         },
     );
-    info!(meeting_id = %config.meeting_id, "audio recording stopped");
+}
+
+async fn capture(
+    config: &mut CaptureConfig,
+    stop_rx: &mut mpsc::Receiver<()>,
+) -> Result<(), String> {
+    let backend = select_recorder_backend()
+        .ok_or("install pipewire-utils (Fedora) or pipewire-audio (Arch)")?;
+    if config.capture_loopback && backend != RecorderBackend::PipeWire {
+        return Err(
+            "microphone + output capture requires PipeWire; refusing microphone-only fallback"
+                .to_owned(),
+        );
+    }
+    let directory = default_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    fs::create_dir_all(&directory)
+        .await
+        .map_err(|e| e.to_string())?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut graph = if config.capture_loopback {
+        Some(pipewire::MixGraph::start(&config.input_device, &config.output_device).await?)
+    } else {
+        None
+    };
+    let target = graph
+        .as_ref()
+        .map(|g| g.source.clone())
+        .unwrap_or_else(|| config.input_device.clone());
+    let result = async {
+        let mut chunk_index = 1;
+        loop {
+            let path = chunk_path(
+                &directory,
+                &format!("{}_{}", config.meeting_name, config.meeting_id),
+                chunk_index,
+            );
+            let command = recorder_command(backend, &target, &path);
+            let result = record_chunk(config, command, &path, stop_rx, &mut graph).await;
+            if file_has_audio(&path).await {
+                publish(
+                    &config.event_tx,
+                    AppEvent::RecordingChunkReady {
+                        meeting_id: config.meeting_id,
+                        path,
+                    },
+                );
+            }
+            if result? {
+                return Ok(());
+            }
+            chunk_index += 1;
+        }
+    }
+    .await;
+    if let Some(graph) = graph {
+        graph.stop().await;
+    }
+    result
 }
 
 async fn record_chunk(
-    config: &CaptureConfig,
-    backend: RecorderBackend,
+    config: &mut CaptureConfig,
+    command: RecorderCommand,
     path: &Path,
     stop_rx: &mut mpsc::Receiver<()>,
+    graph: &mut Option<pipewire::MixGraph>,
 ) -> Result<bool, String> {
-    let command = recorder_command(backend, &config.input_device, path);
     let mut child = Command::new(command.program)
         .args(command.args)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("failed to launch recorder: {error}"))?;
     let mut interval = tokio::time::interval(STOP_POLL_INTERVAL);
     let startup_timeout = tokio::time::sleep(RECORDER_STARTUP_TIMEOUT.min(config.chunk_duration));
     let duration = tokio::time::sleep(config.chunk_duration.max(STOP_POLL_INTERVAL));
+    let mut startup_checked = false;
     tokio::pin!(startup_timeout);
     tokio::pin!(duration);
     loop {
         tokio::select! {
             status = child.wait() => {
                 let status = status.map_err(|error| format!("failed to wait for recorder: {error}"))?;
-                // Capture stderr for debugging
-                let mut stderr_output = String::new();
-                if let Some(stderr) = child.stderr.take() {
-                    use tokio::io::AsyncReadExt;
-                    let _ = stderr.take(1024 * 1024).read_to_string(&mut stderr_output).await;
-                }
-                if !status.success() {
-                    let err_msg = format!("recorder exited with status {status}");
-                    if !stderr_output.is_empty() {
-                        warn!(backend = ?backend, stderr = %stderr_output, "{}", err_msg);
-                    }
-                    return Err(err_msg);
-                } else if !stderr_output.is_empty() {
-                    debug!(backend = ?backend, stderr = %stderr_output, "recorder stderr output");
-                }
-                return Ok(true);
+                return Err(format!("recorder exited unexpectedly with status {status}; see recorder stderr"));
             }
             _ = stop_rx.recv() => {
                 stop_child(&mut child).await?;
                 return Ok(true);
             }
             _ = interval.tick() => {
+                if let Some(graph) = graph {
+                    if let Err(error) = graph.refresh(&config.input_device, &config.output_device).await {
+                        stop_child(&mut child).await?;
+                        return Err(error);
+                    }
+                }
+                if !startup_checked && wav_data_present(path).await {
+                    startup_checked = true;
+                    announce_recording(config);
+                }
                 if file_len(path).await >= config.max_chunk_bytes {
                     stop_child(&mut child).await?;
                     return Ok(false);
                 }
             }
-            _ = &mut startup_timeout => {
-                if recorder_startup_stalled(file_len(path).await) {
+            _ = &mut startup_timeout, if !startup_checked => {
+                startup_checked = true;
+                if !wav_data_present(path).await {
                     stop_child(&mut child).await?;
                     return Err(format!(
-                        "recorder backend {backend:?} did not produce audio within {}s",
+                        "recorder {} did not produce audio within {}s",
+                        command.program,
                         RECORDER_STARTUP_TIMEOUT.as_secs()
                     ));
                 }
+                announce_recording(config);
             }
             _ = &mut duration => {
                 stop_child(&mut child).await?;
                 return Ok(false);
             }
         }
+    }
+}
+
+fn announce_recording(config: &mut CaptureConfig) {
+    if !config.recording_started {
+        config.recording_started = true;
+        publish(
+            &config.event_tx,
+            AppEvent::RecordingStarted {
+                meeting_id: config.meeting_id,
+            },
+        );
+        info!(meeting_id = %config.meeting_id, "audio recording started");
     }
 }
 async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
@@ -290,9 +330,9 @@ async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
             );
             if let Err(e) = kill(Pid::from_raw(pid_i32), Signal::SIGTERM) {
                 warn!(pid = pid_i32, error = %e, "failed to send SIGTERM, falling back to SIGKILL");
-                return child
-                    .start_kill()
-                    .map_err(|e| format!("failed to kill recorder: {e}"));
+                child.start_kill().map_err(|e| e.to_string())?;
+                child.wait().await.map_err(|e| e.to_string())?;
+                return Ok(());
             }
             match tokio::time::timeout(RECORDER_STOP_TIMEOUT, child.wait()).await {
                 Ok(Ok(_status)) => {
@@ -315,11 +355,33 @@ async fn stop_child(child: &mut tokio::process::Child) -> Result<(), String> {
     // Fallback to SIGKILL (or Windows/non-Unix)
     child
         .start_kill()
-        .map_err(|e| format!("failed to kill recorder: {e}"))
+        .map_err(|e| format!("failed to kill recorder: {e}"))?;
+    child.wait().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-fn recorder_startup_stalled(file_len: u64) -> bool {
-    file_len <= 44
+async fn wav_data_present(path: &Path) -> bool {
+    use tokio::io::AsyncReadExt;
+    let Ok(file) = fs::File::open(path).await else {
+        return false;
+    };
+    let mut bytes = Vec::new();
+    if file.take(65536).read_to_end(&mut bytes).await.is_err() || bytes.get(..4) != Some(b"RIFF") {
+        return false;
+    }
+    let mut offset = 12;
+    while offset + 8 <= bytes.len() {
+        if &bytes[offset..offset + 4] == b"data" {
+            return bytes.len() > offset + 9;
+        }
+        let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap_or_default())
+            as usize;
+        offset = offset
+            .saturating_add(8)
+            .saturating_add(size)
+            .saturating_add(size % 2);
+    }
+    false
 }
 
 fn select_recorder_backend() -> Option<RecorderBackend> {
@@ -429,7 +491,17 @@ fn chunk_path(directory: &Path, meeting_name: &str, index: u64) -> PathBuf {
 }
 
 async fn file_has_audio(path: &Path) -> bool {
-    file_len(path).await > 44
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        hound::WavReader::open(path)
+            .map(|mut reader| {
+                reader.spec().sample_rate > 0
+                    && reader.samples::<i16>().next().is_some_and(|s| s.is_ok())
+            })
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 async fn file_len(path: &Path) -> u64 {
@@ -539,11 +611,61 @@ mod tests {
         std::fs::remove_file(path).expect("test file should be removed");
     }
 
-    #[test]
-    fn spec_005_startup_timeout_requires_audio_bytes_beyond_wav_header() {
-        assert!(recorder_startup_stalled(0));
-        assert!(recorder_startup_stalled(44));
-        assert!(!recorder_startup_stalled(45));
+    #[tokio::test]
+    async fn spec_005_rejects_header_only_and_invalid_wav() {
+        let path = std::env::temp_dir().join(format!("{}.wav", Uuid::new_v4()));
+        fs::write(&path, vec![0; 100]).await.unwrap();
+        assert!(!wav_data_present(&path).await);
+        assert!(!file_has_audio(&path).await);
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        writer.flush().unwrap();
+        assert!(!wav_data_present(&path).await);
+        writer.write_sample(123_i16).unwrap();
+        writer.finalize().unwrap();
+        assert!(wav_data_present(&path).await);
+        assert!(file_has_audio(&path).await);
+        fs::remove_file(path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recorder_failure_empty_exit_and_stall_never_report_success() {
+        let bus = rustle_core::EventBus::new();
+        let mut events = bus.subscribe();
+        let mut config = CaptureConfig {
+            meeting_id: Uuid::new_v4(),
+            meeting_name: "Recorder failure".into(),
+            input_device: "default".into(),
+            output_device: "default".into(),
+            capture_loopback: false,
+            recording_started: false,
+            chunk_duration: Duration::from_secs(60),
+            max_chunk_bytes: MAX_CHUNK_BYTES,
+            event_tx: bus.sender(),
+        };
+        let (_stop, mut stop_rx) = mpsc::channel(1);
+        let path = std::env::temp_dir().join(format!("{}.wav", Uuid::new_v4()));
+        for script in ["exit 7", "exit 0", "exec sleep 30"] {
+            let result = record_chunk(
+                &mut config,
+                RecorderCommand {
+                    program: "sh",
+                    args: vec!["-c".into(), script.into()],
+                },
+                &path,
+                &mut stop_rx,
+                &mut None,
+            )
+            .await;
+            assert!(result.is_err(), "{script} must fail: {result:?}");
+            assert!(!config.recording_started);
+            assert!(events.try_recv().is_err());
+        }
     }
 
     #[tokio::test]

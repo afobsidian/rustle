@@ -1,0 +1,18 @@
+pkgname=rustle
+pkgver=0.0.3
+pkgrel=1
+pkgdesc='Local meeting recording and notes for Hyprland'
+arch=('x86_64')
+url='https://github.com/afobsidian/rustle'
+license=('MIT')
+depends=('hyprland' 'pipewire-audio' 'pipewire-pulse' 'wireplumber' 'libpulse' 'systemd' 'dbus' 'flatpak' 'python' 'curl' 'xdg-utils' 'gcc-libs')
+makedepends=('rust' 'clang' 'cmake' 'make')
+# Build from the reviewed checkout; no mutable release URL or unverified download.
+build() {
+  cd "$startdir/.."
+  cargo build --locked --release --bin rustle
+}
+package() {
+  cd "$startdir/.."
+  make stage DESTDIR="$pkgdir" PREFIX=/usr
+}

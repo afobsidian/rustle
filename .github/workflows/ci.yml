@@ -12,8 +12,12 @@ permissions:
 
 jobs:
   validate:
-    name: Rust 1.88.0
+    name: Rust ${{ matrix.toolchain }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [1.88.0, stable]
 
     steps:
       - name: Checkout
@@ -21,11 +25,15 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install "1.88.0" --profile minimal --component rustfmt --component clippy
-          rustup default "1.88.0"
+          rustup toolchain install '${{ matrix.toolchain }}' --profile minimal --component rustfmt --component clippy
+          rustup default '${{ matrix.toolchain }}'
 
       - name: Show toolchain
         run: rustc --version && cargo --version
 
       - name: Run CI
         run: make ci
+  desktop:
+    uses: ./.github/workflows/desktop.yml
+    with:
+      ref: ${{ github.sha }}

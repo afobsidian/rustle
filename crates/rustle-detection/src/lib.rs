@@ -1,5 +1,8 @@
 //! Meeting detection crate for Rustle.
 
+mod hyprland;
+pub mod teams;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,7 +13,6 @@ use rustle_core::{
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 use tracing::{info, warn};
@@ -19,7 +21,7 @@ use uuid::Uuid;
 const HYPRLAND_SOCKET_NAME: &str = ".socket2.sock";
 const HYPRLAND_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const HYPRLAND_MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
-const HYPRLAND_POLL_INTERVAL: Duration = Duration::from_secs(15);
+const HYPRLAND_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const NON_MEETING_TITLE_PREFIXES: &[&str] = &[
     "activity",
     "calendar",
@@ -87,11 +89,11 @@ struct HyprlandClient {
     address: String,
     #[serde(rename = "class", default)]
     class_name: String,
-    #[serde(default)]
+    #[serde(rename = "initialClass", alias = "initial_class", default)]
     initial_class: String,
     #[serde(default)]
     title: String,
-    #[serde(default)]
+    #[serde(rename = "initialTitle", alias = "initial_title", default)]
     initial_title: String,
     #[serde(default = "default_true")]
     mapped: bool,
@@ -132,16 +134,15 @@ async fn detection_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
     if !is_hyprland_session() {
         warn!(
             expected_session = supported_session_label(),
-            "automatic meeting detection is disabled because the current session is unsupported"
+            "Hyprland session variables are missing; automatic instance discovery will retry"
         );
     }
 
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
-    if is_hyprland_session() {
-        spawn_logged(
-            "hyprland-event-listener",
-            hyprland_event_listener(trigger_tx.clone()),
-        );
+    let mut listeners = Vec::new();
+    if settings.meeting.auto_detect {
+        listeners.push(tokio::spawn(hyprland_event_listener(trigger_tx.clone())));
+        listeners.push(tokio::spawn(teams::watch(trigger_tx.clone())));
         let _ = trigger_tx.send(());
     }
 
@@ -150,12 +151,13 @@ async fn detection_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
 
     let mut active_meeting: Option<DetectedMeeting> = None;
     let mut external_meeting_id: Option<Uuid> = None;
+    let mut detection_error: Option<String> = None;
 
     loop {
         tokio::select! {
             event = event_rx.recv() => match event {
                 Ok(AppEvent::MeetingStarted { id, source, .. }) => {
-                    if source != DetectionSource::Hyprland {
+                    if source == DetectionSource::Manual {
                         external_meeting_id = Some(id);
                         end_detected_meeting(&event_tx, &mut active_meeting);
                     }
@@ -168,7 +170,7 @@ async fn detection_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
                 }
                 Ok(AppEvent::SettingsChanged(updated_settings)) => {
                     let was_enabled = detection_enabled(&settings);
-                    settings = updated_settings;
+                    settings = *updated_settings;
                     let is_enabled = detection_enabled(&settings);
 
                     if !is_enabled {
@@ -199,15 +201,19 @@ async fn detection_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
                         &event_tx,
                         &mut active_meeting,
                         external_meeting_id,
+                        &mut detection_error,
                     )
                     .await;
                 }
             }
             _ = poll_interval.tick(), if detection_enabled(&settings) => {
-                reconcile_detected_meeting(&event_tx, &mut active_meeting, external_meeting_id)
+                reconcile_detected_meeting(&event_tx, &mut active_meeting, external_meeting_id, &mut detection_error)
                     .await;
             }
         }
+    }
+    for listener in listeners {
+        listener.abort();
     }
 }
 
@@ -215,20 +221,42 @@ async fn reconcile_detected_meeting(
     event_tx: &EventSender,
     active_meeting: &mut Option<DetectedMeeting>,
     external_meeting_id: Option<Uuid>,
+    detection_error: &mut Option<String>,
 ) {
     if external_meeting_id.is_some() {
         end_detected_meeting(event_tx, active_meeting);
         return;
     }
 
-    let candidate = match snapshot_meeting_candidate().await {
+    let candidate = match snapshot_meeting_candidate(active_meeting.as_ref()).await {
         Ok(candidate) => candidate,
         Err(error) => {
             warn!(%error, "failed to inspect Hyprland clients for meeting detection");
+            if active_meeting
+                .as_ref()
+                .is_some_and(|meeting| meeting.address == "teams-dbus")
+                && teams::has_owner().await == Ok(false)
+            {
+                end_detected_meeting(event_tx, active_meeting);
+            }
+            if detection_error.as_ref() != Some(&error) {
+                publish(
+                    event_tx,
+                    AppEvent::NotificationRequested {
+                        title: "Automatic meeting detection unavailable".to_owned(),
+                        body: format!("{error} Run rustle doctor --json for setup details."),
+                        urgency: rustle_core::NotificationUrgency::Critical,
+                    },
+                );
+            }
+            *detection_error = Some(error);
             return;
         }
     };
 
+    if detection_error.take().is_some() {
+        info!("automatic meeting detection recovered");
+    }
     apply_detected_candidate(event_tx, active_meeting, candidate);
 }
 
@@ -250,7 +278,7 @@ fn apply_detected_candidate(
                 AppEvent::MeetingStarted {
                     id: meeting.id,
                     name: meeting.name.clone(),
-                    source: DetectionSource::Hyprland,
+                    source: candidate_source(&meeting.address),
                 },
             );
             *active_meeting = Some(meeting);
@@ -274,7 +302,7 @@ fn apply_detected_candidate(
                 AppEvent::MeetingStarted {
                     id: meeting.id,
                     name: meeting.name.clone(),
-                    source: DetectionSource::Hyprland,
+                    source: candidate_source(&meeting.address),
                 },
             );
             *active_meeting = Some(meeting);
@@ -293,25 +321,70 @@ fn end_detected_meeting(event_tx: &EventSender, active_meeting: &mut Option<Dete
     }
 }
 
-async fn snapshot_meeting_candidate() -> Result<Option<MeetingCandidate>, String> {
-    let output = Command::new("hyprctl")
-        .args(["clients", "-j"])
-        .output()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(format!(
-            "hyprctl clients -j exited with {}: {stderr}",
-            output.status
-        ));
+async fn snapshot_meeting_candidate(
+    active: Option<&DetectedMeeting>,
+) -> Result<Option<MeetingCandidate>, String> {
+    let state = teams::call_state().await;
+    if state == Ok(false) && active.is_some_and(|meeting| meeting.address == "teams-dbus") {
+        return Ok(None);
     }
+    let bytes = if state == Ok(true) {
+        tokio::time::timeout(Duration::from_millis(500), hyprland::clients())
+            .await
+            .map_err(|_| "Hyprland meeting-name lookup timed out".to_owned())
+            .and_then(|result| result)
+    } else {
+        hyprland::clients().await
+    };
+    let clients = bytes.and_then(|bytes| {
+        serde_json::from_slice::<Vec<HyprlandClient>>(&bytes).map_err(|error| error.to_string())
+    });
 
-    let clients = serde_json::from_slice::<Vec<HyprlandClient>>(&output.stdout)
-        .map_err(|error| error.to_string())?;
-
+    if state == Ok(true) {
+        let name = clients
+            .as_ref()
+            .ok()
+            .into_iter()
+            .flatten()
+            .find(|client| is_teams_client(client))
+            .map(meeting_name_from_client)
+            .filter(|name| is_meeting_title_allowed(name))
+            .unwrap_or_else(|| "Teams Meeting".to_owned());
+        return Ok(Some(MeetingCandidate {
+            address: "teams-dbus".to_owned(),
+            name,
+            score: 3,
+        }));
+    }
+    let clients = clients?;
+    if let Err(error) = state {
+        if teams::has_owner().await? {
+            // A timeout or malformed observation is not evidence that a call ended.
+            return Err(error);
+        }
+        // An idle app need not be running, but a visible Teams window must expose the API.
+        if clients.iter().any(is_teams_client) {
+            return Err(error);
+        }
+    }
     Ok(select_meeting_candidate(&clients))
+}
+
+fn candidate_source(address: &str) -> DetectionSource {
+    if address == "teams-dbus" {
+        DetectionSource::TeamsDbus
+    } else {
+        DetectionSource::Hyprland
+    }
+}
+
+fn is_teams_client(client: &HyprlandClient) -> bool {
+    [&client.class_name, &client.initial_class]
+        .iter()
+        .any(|class| {
+            let class = class.to_ascii_lowercase();
+            class == "teams-for-linux" || class == "com.github.ismaelmartinez.teams_for_linux"
+        })
 }
 
 fn select_meeting_candidate(clients: &[HyprlandClient]) -> Option<MeetingCandidate> {
@@ -323,6 +396,10 @@ fn select_meeting_candidate(clients: &[HyprlandClient]) -> Option<MeetingCandida
 }
 
 fn meeting_candidate_from_client(client: &HyprlandClient) -> Option<MeetingCandidate> {
+    // Desktop Teams uses call state, never a title (including Calendar or Chat).
+    if is_teams_client(client) {
+        return None;
+    }
     let address = client.address.trim();
     if address.is_empty() {
         return None;
@@ -454,9 +531,14 @@ fn is_meeting_title_allowed(name: &str) -> bool {
 async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
     let mut mode = ListenerMode::Polling;
     let mut reconnect_delay = HYPRLAND_RECONNECT_DELAY;
+    let mut discovered_path = None;
 
     loop {
-        let Some(socket_path) = hyprland_socket_path() else {
+        let Some(socket_path) = discovered_path.clone().or_else(hyprland_socket_path) else {
+            discovered_path = hyprland::discover()
+                .await
+                .ok()
+                .and_then(|signature| hyprland_socket_candidates(&signature).into_iter().next());
             log_listener_transition(
                 &mut mode,
                 ListenerMode::Polling,
@@ -502,6 +584,10 @@ async fn hyprland_event_listener(trigger_tx: mpsc::UnboundedSender<()>) {
             }
         }
 
+        discovered_path = hyprland::discover()
+            .await
+            .ok()
+            .and_then(|signature| hyprland_socket_candidates(&signature).into_iter().next());
         tokio::time::sleep(reconnect_delay).await;
         reconnect_delay = next_reconnect_delay(reconnect_delay);
     }
@@ -608,7 +694,7 @@ fn log_listener_transition(
 }
 
 fn detection_enabled(settings: &Settings) -> bool {
-    settings.meeting.auto_detect && is_hyprland_session()
+    settings.meeting.auto_detect
 }
 
 fn publish(event_tx: &EventSender, event: AppEvent) {
@@ -710,7 +796,7 @@ mod tests {
     fn accepts_regular_meeting_titles_without_navigation_prefixes() {
         let clients = vec![client(
             "0xabc",
-            "teams-for-linux",
+            "chromium",
             "Sprint Planning | Microsoft Teams",
         )];
 
@@ -928,7 +1014,7 @@ mod tests {
     fn real_meeting_window_with_teams_in_title_is_detected() {
         let clients = vec![client(
             "0xabc",
-            "teams-for-linux",
+            "chromium",
             "Sprint Planning | Microsoft Teams",
         )];
 
@@ -1012,11 +1098,7 @@ mod tests {
         // --- Real meeting window DOES trigger MeetingStarted ---
         let meeting_clients = vec![
             client("0x444", "firefox", "GitHub"),
-            client(
-                "0x555",
-                "teams-for-linux",
-                "Sprint Planning | Microsoft Teams",
-            ),
+            client("0x555", "chromium", "Sprint Planning | Microsoft Teams"),
         ];
         let meeting_candidate = select_meeting_candidate(&meeting_clients);
         assert!(
@@ -1133,7 +1215,7 @@ mod tests {
     fn unread_count_prefix_still_allows_real_meeting_detection() {
         let clients = vec![client(
             "0xabc",
-            "teams-for-linux",
+            "chromium",
             "(1) Sprint Planning | Microsoft Teams",
         )];
 

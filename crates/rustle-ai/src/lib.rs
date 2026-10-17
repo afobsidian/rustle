@@ -30,17 +30,17 @@ pub async fn initialise(
 }
 
 async fn summarisation_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
-    let mut runtime = AiRuntime;
     let mut meeting_names = HashMap::new();
+    let inference_slot = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
     let startup_settings = load_settings("startup AI warmup").await;
-    runtime.warm_up(&startup_settings);
+    AiRuntime.warm_up(&startup_settings);
 
     loop {
         tokio::select! {
             event = event_rx.recv() => match event {
-                Ok(AppEvent::MeetingStarted { id, name, .. }) => {
-                    meeting_names.insert(id, name);
-                }
+                Ok(AppEvent::MeetingStarted { id, name, .. }) => { meeting_names.insert(id, name); }
+                Ok(AppEvent::TranscriptImported { meeting_id, name }) => { meeting_names.insert(meeting_id, name); }
+                Ok(AppEvent::MeetingFinished { meeting_id }) => { meeting_names.remove(&meeting_id); }
                 Ok(AppEvent::TranscriptionReady {
                     meeting_id,
                     segments,
@@ -48,12 +48,11 @@ async fn summarisation_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                     let settings = load_settings("AI summarisation").await;
                     let transcript = transcript_text(&segments);
                     if transcript.trim().is_empty() {
-                        warn!(meeting_id = %meeting_id, "skipping summarisation for empty transcript");
+                        publish(&event_tx, AppEvent::MeetingFinished { meeting_id });
                         continue;
                     }
                     let meeting_name = meeting_names
-                        .get(&meeting_id)
-                        .cloned()
+                        .remove(&meeting_id)
                         .unwrap_or_else(|| "Meeting".to_owned());
                     info!(
                         meeting_id = %meeting_id,
@@ -62,20 +61,17 @@ async fn summarisation_loop(event_tx: EventSender, mut event_rx: EventReceiver) 
                         transcript_chars = transcript.chars().count(),
                         "summarising transcript"
                     );
-                    summarise(
-                        &event_tx,
-                        &mut runtime,
-                        meeting_id,
-                        &meeting_name,
-                        settings,
-                        transcript,
-                    )
-                    .await;
+                    let sender = event_tx.clone();
+                    let slot = inference_slot.clone();
+                    spawn_logged("meeting-summarisation", async move {
+                        let Ok(_permit) = slot.acquire_owned().await else { return; };
+                        summarise(&sender, &mut AiRuntime, meeting_id, &meeting_name, settings, transcript).await;
+                    });
                 }
                 Ok(AppEvent::SettingsChanged(settings)) => {
-                    runtime.warm_up(&settings.validated());
+                    AiRuntime.warm_up(&settings.validated());
                 }
-                Ok(AppEvent::QuitRequested) => break,
+                Ok(AppEvent::ShutdownComplete) => break,
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     warn!(skipped, "AI loop lagged behind event bus");
@@ -98,6 +94,14 @@ async fn summarise(
         SummarisationOutcome::Ready { notes, warning } => {
             info!(meeting_id = %meeting_id, "summarisation complete");
             if let Some(warning) = warning {
+                publish(
+                    event_tx,
+                    AppEvent::WorkflowFailed {
+                        meeting_id,
+                        stage: "summarisation".to_owned(),
+                        message: warning.clone(),
+                    },
+                );
                 publish(
                     event_tx,
                     summarisation_warning_notification(meeting_name, &warning),
@@ -191,6 +195,9 @@ mod tests {
         )
         .await;
 
+        assert!(
+            matches!(observer.recv().await.unwrap(), AppEvent::WorkflowFailed { ref stage, .. } if stage == "summarisation")
+        );
         let warning = observer
             .recv()
             .await

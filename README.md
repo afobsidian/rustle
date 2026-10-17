@@ -1,26 +1,87 @@
 # Rustle
 
-Rust-native desktop meeting notes app for Fedora Linux on Hyprland.
+Local meeting recording, transcription, and Markdown notes for x86-64 Hyprland on
+obsidian-blue, Fedora, and Arch.
 
-## Documentation
+## Requirements and first setup
 
-| Document                                       | Purpose                                                                                  |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| [docs/architecture.md](docs/architecture.md)   | Code-aligned software architecture, crate boundaries, event flows, and runtime topology. |
-| [docs/specification.md](docs/specification.md) | Product specification plus implemented release-contract specs.                           |
-| [docs/devops.md](docs/devops.md)               | Local run, validation, release, and smoke-test procedures.                               |
+The x86-64 release requires an AVX2 CPU with FMA, F16C, BMI2 and SSE4.2
+(Haswell/Zen or newer). Setup and doctor check this before local inference.
 
-## Run Rustle
+Automatic desktop Teams detection requires **Teams for Linux 2.25.0 or newer** with
+its session D-Bus API enabled. Rustle reads call state; Calendar, Chat, incoming
+ringing, window focus, and microphone mute do not constitute a joined call.
+The upstream API reports the selected Teams profile, not every account at once.
 
-Rustle starts as a StatusNotifierItem system tray app on Hyprland with an SNI host such as Waybar. It keeps terminal controls as a fallback when a tray host or D-Bus is unavailable, warns when launched outside Hyprland, starts audio capture for meetings when `meeting.auto_capture = true`, transcribes completed WAV chunks through the configured local Whisper model, summarizes the transcript through the configured AI provider, and writes Markdown notes. If a meeting ends while recording is still flushing its last chunk, Rustle waits for that final chunk before publishing the transcript. If a transcript draft is still empty at finalisation, Rustle keeps the draft file and skips note generation instead of producing empty output.
+If stable Flatpak is older, install and launch beta explicitly:
 
 ```sh
-make run
+flatpak remote-add --if-not-exists flathub-beta https://flathub.org/beta-repo/flathub-beta.flatpakrepo
+flatpak install flathub-beta com.github.IsmaelMartinez.teams_for_linux//beta
+flatpak run com.github.IsmaelMartinez.teams_for_linux//beta
 ```
 
-Tray actions are grouped around the user workflow: meeting controls, review and editing, capture preferences, and provider/configuration. Left-clicking the tray icon plus the `open` and `notes` terminal commands follow the same rule: open the current transcript draft during an active meeting when one exists, otherwise open the latest saved note, otherwise open the notes folder. The Review & Edit submenu also exposes recent notes/transcripts, transcript re-summarisation into a new note, and safe deletion inside Rustle-managed directories.
+See the [upstream installation guide](https://ismaelmartinez.github.io/teams-for-linux/installation/)
+and [D-Bus API](https://ismaelmartinez.github.io/teams-for-linux/development/dbus-control/).
 
-Available fallback terminal commands while Rustle is running:
+Install PipeWire, its PulseAudio compatibility server, WirePlumber, `pactl`, the
+PipeWire command-line tools, systemd/D-Bus, Python 3, curl, and xdg-utils. Fedora's
+recorder package is `pipewire-utils`; Arch's is `pipewire-audio`. The RPM declares
+runtime dependencies, and obsidian-blue installs them as required packages.
+
+```sh
+rustle setup
+rustle doctor --json
+rustle
+```
+
+Setup preserves Teams configuration, backs it up before enabling D-Bus, downloads
+and SHA-256 verifies pinned Whisper and Qwen models (about 2.3 GB), then runs an
+automatic capture-to-note test. Restart Teams after changing its D-Bus setting.
+The first normal launch also performs setup when no matching readiness record
+exists. Setup errors appear in diagnostics and desktop notifications.
+
+The self-test runs private PipeWire and D-Bus services with hardware monitors
+disabled. It records synthetic speech from virtual devices, exercises default
+output switching and recording rotation, and validates real transcription,
+notes, file retention, shutdown, and cleanup. It does not change your desktop's
+audio defaults or record a physical microphone.
+
+## Recording and notes
+
+Fresh configurations capture the microphone **and selected audio output**, so
+remote participants are included with headphones. Other sounds on that output
+are included too. Explicit existing preferences are preserved:
+
+```toml
+[audio]
+input_device = "default"
+output_device = "default"
+capture_loopback = true
+max_recording_size_mb = 2048
+chunk_duration_minutes = 10
+```
+
+Use a PipeWire node name for a fixed device. `default` follows default-device
+changes during capture. Mixed capture uses temporary PipeWire nodes; it never
+feeds recorded audio back to physical speakers. Microphone-only recording also
+retains the existing PulseAudio/ALSA recorder fallbacks.
+
+Recordings are 16 kHz mono WAV chunks. Meeting end waits for final recording and
+transcription work. Quit and SIGTERM drain pending processing before exit; an
+explicit timeout reports failure and retains source files. Short meetings are
+kept. File names include unique IDs, and notes are published atomically.
+
+Data lives under `$XDG_DATA_HOME/rustle` (normally `~/.local/share/rustle`):
+`recordings/`, `transcripts/`, `notes/`, and `logs/rustle.log`. Configuration is
+`$XDG_CONFIG_HOME/rustle/config.toml` (normally `~/.config/rustle/config.toml`).
+Local Whisper and llama.cpp are the default providers; Ollama is optional.
+Unsupported hosted providers produce observable fallback notes and fail a
+successful-processing test. Existing browser-title detection remains available;
+Teams desktop windows use D-Bus instead of title heuristics.
+
+The tray opens drafts, notes, settings, and managed document folders through the
+desktop opener. Terminal controls remain available:
 
 ```text
 start [meeting name]
@@ -33,52 +94,30 @@ quit
 help
 ```
 
-The manual meeting flow is the must-pass release workflow. On Fedora/Hyprland, Rustle also ships Hyprland-based Teams detection as the supported automatic path for Microsoft Teams desktop windows and common Teams web titles in browsers such as Chromium, Chrome, and Firefox. Navigation views such as Calendar, Chat, Calls, and Activity are intentionally ignored so they do not start meetings by mistake, and one-to-one chat titles remain filtered even when they include a Teams suffix.
+Re-summarising an existing transcript does not start a recording. For manual-only
+use without Teams, set `meeting.auto_detect = false` before setup.
 
-The audio recorder uses the first available Linux recording tool in this order: `pw-record` (PipeWire), `parecord` (PulseAudio), then `arecord` (ALSA). On Fedora/PipeWire systems this should work with the OS-provided PipeWire tools; no extra Rustle-specific service is required. Recordings are saved as 16 kHz mono WAV chunks under `~/.local/share/rustle/recordings/`.
+## Installation and automatic verification
 
-Recorder startup and shutdown are now bounded for release reliability. If a selected backend launches but does not produce audio bytes within a short startup window, Rustle stops that chunk attempt, logs the backend failure, and avoids publishing an empty chunk downstream.
-
-To test transcription without the live mic, run Rustle with `RUSTLE_TEST_AUDIO_FILE=/path/to/sample.wav`. Live audio capture is skipped for that run, and the WAV is transcribed when you enter `stop` for the manual meeting. You can also point `RUSTLE_TEST_AUDIO_FILE` at a `.txt` or `.md` transcript fixture; Rustle loads that text directly for deterministic end-to-end testing.
-
-Rustle opens notes, transcript drafts, and the settings file through `xdg-open` first so the desktop's normal editor association is used, then falls back to `$VISUAL` or `$EDITOR` if needed.
-
-Local transcription uses `whisper-rs` and reads the model configured by `transcription.model_path`. When the default model path is used, Rustle downloads the whisper.cpp `ggml-base.en.bin` model on first transcription if it is missing:
-
-```toml
-[transcription]
-method = "local"
-model_path = "~/.local/share/rustle/models/ggml-base.en.bin"
+```sh
+make install                         # development binary and launcher in ~/.local
+make ci                              # formatting, Clippy, workspace tests, build
+make test-desktop                    # required installed desktop matrix
+rustle self-test                     # repeat private capture-to-note verification
 ```
 
-For a custom `transcription.model_path`, download or place a compatible whisper.cpp `ggml` model at that path yourself.
+The desktop matrix installs the candidate RPM on Fedora and obsidian-blue and a
+native package on Arch, then tests actual Hyprland, UWSM, PipeWire, tray,
+notifications, and the required Teams Flatpak API. Synthetic protocol tests cover
+call lifecycle; authenticated Microsoft calls are outside this gate. Release
+publishing depends on every gate passing; missing required services fail the job.
 
-The settings surface still shows `openai` as a transcription option so the planned support shape stays visible, but OpenAI transcription is not supported in the current release scope. If selected, Rustle logs a clear warning and instructs you to use local Whisper instead.
+obsidian-blue installs the pinned release, verifies and records its checksum,
+adds the required Teams Flatpak, and starts Rustle with the UWSM graphical
+session. Its Teams launcher selects an installed branch meeting the minimum
+version. Existing `start_on_login = false` is respected. Other installations can
+enable the supplied `rustle.service`; a bare Hyprland session can launch `rustle`
+from its own startup configuration without depending on UWSM.
 
-The default AI provider is the local `llama_cpp` backend using a quantized GGUF model. The first run may download model files, and failures still fall back to locally generated Markdown warning notes.
-
-To point Rustle at a different local llama.cpp model, set this in `~/.config/rustle/config.toml`:
-
-```toml
-[ai]
-provider = "llama_cpp"
-model = "Qwen/Qwen2.5-3B-Instruct-GGUF"
-hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
-hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
-```
-
-Ollama remains available as an optional provider by setting `provider = "ollama"`. The settings surface also keeps `openai` and `anthropic` visible, but those hosted providers are not supported in the current release scope. If a hosted provider is selected, Rustle saves fallback notes with the reason instead of failing silently. Transcript drafts are created under `~/.local/share/rustle/transcripts/` so you can monitor or manually edit transcript text, and Markdown notes are saved under `~/.local/share/rustle/notes/` without embedding the transcript. If a meeting ends with no recorded audio or manual transcript text, Rustle keeps the draft and skips note generation rather than saving an empty note. Settings are stored at `~/.config/rustle/config.toml` and can be opened from the tray menu.
-
-Rustle now honors the existing start-on-login settings on Linux. Set `general.start_on_login = true` and choose `general.start_on_login_method = "xdg"` to manage `~/.config/autostart/rustle.desktop`, or `"systemd"` to manage `~/.config/systemd/user/rustle.service` plus its `default.target.wants` symlink. Switching methods cleans up the stale integration path on the next launch.
-
-Rustle now writes structured diagnostics to stderr and to `~/.local/share/rustle/logs/rustle.log` by default. Unhandled panics are captured through a top-level panic hook so release-support triage has a stable log destination.
-
-Rustle also sends desktop notifications for meeting detection and recording start, saved notes, and user-visible transcription or summarisation fallbacks. If desktop notification delivery is unavailable, Rustle logs the failure and continues running.
-
-Run `make bench-ai` to compare several suitable GGUF models through the local llama.cpp backend on this machine.
-
-Hyprland-based Teams detection is implemented for the supported automatic workflow on Fedora/Hyprland. Rustle keeps polling Hyprland clients even when the event socket is temporarily unavailable, and reconnects to the socket automatically after Hyprland restarts so detection can recover without restarting the app. Native notes and settings windows remain follow-on work; Rustle stays tray-first and opens notes, transcripts, and settings through your editor or desktop opener.
-
-## DevOps
-
-Use `make ci` to run the local validation gate. See [docs/devops.md](docs/devops.md) for test, build, release, and pipeline procedures, including the release-candidate checklist for `make install`, `make release-build`, `make dist`, `make rpm`, checksum verification, post-install startup checks, and the Fedora/Hyprland smoke matrix.
+See [DevOps and release procedures](docs/devops.md),
+[architecture](docs/architecture.md), and [specification](docs/specification.md).

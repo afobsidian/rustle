@@ -1,0 +1,65 @@
+name: Installed desktop gate
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Installed app / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fedora, arch, obsidian-blue]
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/cache@v4
+        with:
+          path: target/desktop-models
+          key: rustle-default-models-a03779c8-626b4a66
+      - uses: actions/cache@v4
+        with:
+          path: target/desktop-vm/base.img
+          key: rustle-desktop-vm-2f119f50
+      - uses: actions/checkout@v4.2.2
+        with:
+          repository: afobsidian/obsidian-blue
+          path: target/obsidian-blue
+      - name: Run required installed desktop tests
+        env:
+          OBSIDIAN_BLUE_DIR: ${{ github.workspace }}/target/obsidian-blue
+        run: |
+          # Reclaim unused SDKs on this disposable hosted runner for the image/VM.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 cloud-image-utils
+          python3 scripts/test-desktop-vm.py '${{ matrix.target }}'
+      - name: Preserve evidence and tested candidate
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: rustle-desktop-${{ matrix.target }}
+          path: target/desktop-artifacts/${{ matrix.target }}
+          if-no-files-found: error
+      - name: Preserve VM diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: rustle-vm-${{ matrix.target }}
+          path: |
+            target/desktop-artifacts/vm*
+            target/desktop-vm/console.log
+          if-no-files-found: warn

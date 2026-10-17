@@ -885,7 +885,7 @@ fn request_settings_update(
         let settings = settings.validated();
 
         match settings.save().await {
-            Ok(()) => publish(&event_tx, AppEvent::SettingsChanged(settings)),
+            Ok(()) => publish(&event_tx, AppEvent::SettingsChanged(Box::new(settings))),
             Err(error) => warn!(%error, "failed to persist tray settings change"),
         }
     });

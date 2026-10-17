@@ -64,6 +64,8 @@ async fn spec_021_manual_workflow_persists_transcript_and_notes() {
 
     bus.publish(AppEvent::MeetingEnded { id: meeting_id })
         .expect("meeting end should publish");
+    bus.publish(AppEvent::RecordingStopped { meeting_id })
+        .unwrap();
 
     let notification = wait_for_fallback_notification(&mut observer)
         .await

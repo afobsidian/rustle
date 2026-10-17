@@ -1,0 +1,14 @@
+[Unit]
+Description=Rustle meeting recording and notes
+PartOf=graphical-session.target
+After=graphical-session-pre.target pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rustle --session
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=620
+
+[Install]
+WantedBy=graphical-session.target

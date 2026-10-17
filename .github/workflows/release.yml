@@ -2,67 +2,66 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to publish, for example v0.1.0"
+        description: Existing reviewed tag to validate and publish
         required: true
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Build and publish Linux release
+  desktop:
+    uses: ./.github/workflows/desktop.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+  validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4.2.2
         with:
-          fetch-depth: 0
-
-      - name: Resolve release tag
-        id: release
+          ref: ${{ inputs.tag || github.ref }}
+      - run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+          make ci
+  publish:
+    needs: [validate, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rustle-desktop-*
+          path: evidence
+      - name: Assemble only tested artifacts
         env:
-          RELEASE_INPUT: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "tag=${RELEASE_INPUT}" >> "$GITHUB_OUTPUT"
-            git checkout "$RELEASE_INPUT"
-          else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-          cargo install cargo-generate-rpm --locked
-
-      - name: Validate release candidate
-        run: make ci
-
-      - name: Package artifacts
-        run: make dist rpm
-
-      - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4.6.2
-        with:
-          name: rustle-linux-${{ steps.release.outputs.tag }}
-          path: dist/*
-          if-no-files-found: error
-
-      - name: Publish GitHub release
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')
+          test "$RELEASE_TAG" = "v$version"
+          mkdir dist
+          cp evidence/rustle-desktop-fedora/candidate/rustle.tar.gz "dist/rustle-$version-x86_64-unknown-linux-gnu.tar.gz"
+          cp evidence/rustle-desktop-fedora/candidate/rustle.rpm "dist/rustle-$version.x86_64.rpm"
+          cp evidence/rustle-desktop-arch/candidate/*.pkg.tar.zst dist/
+          cmp evidence/rustle-desktop-fedora/candidate/usr/bin/rustle evidence/rustle-desktop-arch/candidate/usr/bin/rustle
+          cmp evidence/rustle-desktop-fedora/candidate/usr/bin/rustle evidence/rustle-desktop-obsidian-blue/candidate/usr/bin/rustle
+          cd dist
+          for artifact in *.tar.gz *.rpm *.pkg.tar.zst; do sha256sum "$artifact" >"$artifact.sha256"; done
+      - name: Publish validated release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release upload "$RELEASE_TAG" dist/*
           else
             gh release create "$RELEASE_TAG" dist/* --generate-notes --verify-tag
           fi

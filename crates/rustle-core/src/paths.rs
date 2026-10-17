@@ -7,6 +7,16 @@ use crate::settings::Settings;
 
 const APP_DATA_DIR: &str = "rustle";
 
+/// Removes the collision-resistant ID from a document's title fragment.
+/// Legacy timestamp/title filenames are left unchanged.
+pub fn strip_document_id(fragment: &str) -> &str {
+    fragment
+        .split_once('_')
+        .filter(|(id, _)| uuid::Uuid::parse_str(id).is_ok())
+        .map(|(_, title)| title)
+        .unwrap_or(fragment)
+}
+
 /// Expands a leading `~` in a user-configurable path.
 pub fn expand_tilde(path: impl AsRef<str>) -> Result<PathBuf, CoreError> {
     let path = path.as_ref();

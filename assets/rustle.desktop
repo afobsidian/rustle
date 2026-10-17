@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Rustle
+Comment=Local meeting recording and notes
+Exec=rustle
+Icon=rustle
+Terminal=false
+Categories=Office;

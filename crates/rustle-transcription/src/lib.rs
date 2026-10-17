@@ -1,14 +1,14 @@
 //! Transcription crate for Rustle.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs as std_fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use rustle_core::{
     expand_tilde, resolve_transcripts_dir, safe_filename, tasks::spawn_logged, AppEvent, CoreError,
-    DetectionSource, EventReceiver, EventSender, NotificationUrgency, Settings, StoredDocumentKind,
-    TranscriptSegment, TranscriptionMethod,
+    EventReceiver, EventSender, NotificationUrgency, Settings, TranscriptSegment,
+    TranscriptionMethod,
 };
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -19,16 +19,14 @@ const WHISPER_SAMPLE_RATE: u32 = 16_000;
 const DEFAULT_WHISPER_REPO: &str = "ggerganov/whisper.cpp";
 const DEFAULT_WHISPER_MODEL_FILE: &str = "ggml-base.en.bin";
 const TEST_AUDIO_FILE_ENV: &str = "RUSTLE_TEST_AUDIO_FILE";
-const MIN_AUTODETECTED_MEETING_DURATION: Duration = Duration::from_secs(300);
 
 struct MeetingTranscript {
     name: String,
     path: PathBuf,
     segments: Vec<TranscriptSegment>,
-    chunk_paths: Vec<PathBuf>,
-    source: DetectionSource,
-    started_at: Instant,
-    ended_at: Option<Instant>,
+    pending_chunks: usize,
+    offset_ms: u64,
+    failed: bool,
     test_audio_path: Option<PathBuf>,
     recording_active: bool,
     meeting_ended: bool,
@@ -52,149 +50,129 @@ pub async fn initialise(
 }
 
 async fn transcription_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
-    let mut meetings = HashMap::new();
+    let mut meetings: HashMap<Uuid, MeetingTranscript> = HashMap::new();
     let mut settings = load_settings("audio transcription startup").await;
-
+    let mut failed_drafts = HashSet::new();
+    let mut queue = VecDeque::new();
+    let mut jobs = tokio::task::JoinSet::new();
     loop {
-        match event_rx.recv().await {
-            Ok(AppEvent::MeetingStarted { id, name, source }) => {
-                info!(?source, meeting = %name, "creating transcript draft");
-                match create_transcript_draft(&name).await {
-                    Ok(path) => {
-                        let test_audio_path = test_audio_path_from_env();
-                        if let Some(test_audio_path) = &test_audio_path {
-                            info!(
-                                path = %test_audio_path.display(),
-                                "test audio fixture configured for transcription"
-                            );
+        if jobs.is_empty() {
+            if let Some((id, path, job_settings)) = queue.pop_front() {
+                jobs.spawn(async move {
+                    let result = transcribe_audio_chunk(path, job_settings).await;
+                    (id, result)
+                });
+            }
+        }
+        tokio::select! {
+            result = jobs.join_next(), if !jobs.is_empty() => {
+                if let Some(Ok((id, result))) = result {
+                    if let Some(meeting) = meetings.get_mut(&id) {
+                        meeting.pending_chunks = meeting.pending_chunks.saturating_sub(1);
+                        match result {
+                            Ok((mut segments, duration_ms)) => {
+                                for segment in &mut segments {
+                                    segment.start_ms += meeting.offset_ms;
+                                    segment.end_ms += meeting.offset_ms;
+                                }
+                                meeting.offset_ms = meeting.offset_ms.saturating_add(duration_ms);
+                                if let Err(error) = append_segments(&meeting.path, &segments).await {
+                                    meeting.failed = true;
+                                    workflow_failure(&event_tx, id, "transcript storage", &error.to_string());
+                                }
+                                meeting.segments.extend(segments);
+                            }
+                            Err(error) => {
+                                meeting.failed = true;
+                                workflow_failure(&event_tx, id, "transcription", &error);
+                                publish(&event_tx, transcription_failure_notification(&meeting.name, &error));
+                            }
                         }
-                        meetings.insert(
-                            id,
-                            MeetingTranscript {
-                                name: name.clone(),
-                                path: path.clone(),
-                                segments: Vec::new(),
-                                chunk_paths: Vec::new(),
-                                source,
-                                started_at: Instant::now(),
-                                ended_at: None,
-                                test_audio_path,
-                                recording_active: false,
-                                meeting_ended: false,
-                            },
-                        );
-                        publish(
-                            &event_tx,
-                            AppEvent::TranscriptDraftReady {
-                                meeting_id: id,
-                                path: path.clone(),
-                            },
-                        );
-                        info!(path = %path.display(), "transcript draft path");
                     }
-                    Err(error) => {
-                        warn!(%error, meeting = %name, "failed to create transcript draft")
-                    }
-                }
-            }
-            Ok(AppEvent::RecordingStarted { meeting_id }) => {
-                if let Some(meeting) = meetings.get_mut(&meeting_id) {
-                    meeting.recording_active = true;
-                }
-            }
-            Ok(AppEvent::RecordingChunkReady { meeting_id, path }) => {
-                let Some((meeting_name, transcript_path)) =
-                    meetings.get_mut(&meeting_id).map(|meeting| {
-                        meeting.chunk_paths.push(path.clone());
-                        (meeting.name.clone(), meeting.path.clone())
-                    })
-                else {
-                    warn!(meeting_id = %meeting_id, path = %path.display(), "recording chunk has no active transcript");
-                    continue;
-                };
-
-                let segments = match transcribe_audio_chunk(path.clone(), settings.clone()).await {
-                    Ok(segments) => segments,
-                    Err(error) => {
-                        warn!(%error, path = %path.display(), "failed to transcribe audio chunk");
-                        publish(
-                            &event_tx,
-                            transcription_failure_notification(&meeting_name, &error),
-                        );
-                        vec![recording_fallback_segment(&path, &error)]
-                    }
-                };
-
-                if let Some(meeting) = meetings.get_mut(&meeting_id) {
-                    if let Err(error) = append_segments(&transcript_path, &segments).await {
-                        warn!(%error, path = %transcript_path.display(), "failed to append transcript segments");
-                    }
-                    meeting.segments.extend(segments);
                 } else {
-                    warn!(meeting_id = %meeting_id, path = %path.display(), "recording chunk has no active transcript");
-                }
-            }
-            Ok(AppEvent::MeetingEnded { id }) => {
-                let Some(meeting) = meetings.get_mut(&id) else {
-                    warn!(
-                        meeting_id = %id,
-                        "ignoring duplicate meeting end without an active transcript draft"
-                    );
-                    continue;
-                };
-
-                meeting.meeting_ended = true;
-                meeting.ended_at = Some(Instant::now());
-                if meeting.recording_active {
-                    info!(
-                        meeting_id = %id,
-                        path = %meeting.path.display(),
-                        "meeting ended; waiting for final recording chunk"
-                    );
-                    continue;
-                }
-
-                finalise_meeting_transcript(&event_tx, &mut meetings, id, settings.clone()).await;
-            }
-            Ok(AppEvent::RecordingStopped { meeting_id }) => {
-                let should_finalise = match meetings.get_mut(&meeting_id) {
-                    Some(meeting) => {
-                        meeting.recording_active = false;
-                        meeting.meeting_ended
+                    // A worker panic must not leave meetings permanently pending.
+                    for (id, meeting) in &mut meetings {
+                        meeting.failed = true;
+                        meeting.pending_chunks = 0;
+                        workflow_failure(&event_tx, *id, "transcription", "transcription worker panicked; recordings retained");
                     }
-                    None => {
-                        warn!(
-                            meeting_id = %meeting_id,
-                            "recording stopped without an active transcript draft"
-                        );
-                        false
-                    }
-                };
-
-                if should_finalise {
-                    finalise_meeting_transcript(
-                        &event_tx,
-                        &mut meetings,
-                        meeting_id,
-                        settings.clone(),
-                    )
-                    .await;
+                    queue.clear();
                 }
             }
-            Ok(AppEvent::SummariseTranscriptRequested { path }) => {
-                summarise_saved_transcript(&event_tx, path).await;
+            event = event_rx.recv() => match event {
+                Ok(AppEvent::MeetingStarted { id, name, .. }) => {
+                    match create_transcript_draft(&name).await {
+                        Ok(path) => {
+                            let test_audio_path = test_audio_path_from_env();
+                            meetings.insert(id, MeetingTranscript {
+                                name, path: path.clone(), segments: Vec::new(), pending_chunks: 0,
+                                offset_ms: 0, failed: false,
+                                recording_active: true,
+                                test_audio_path, meeting_ended: false,
+                            });
+                            publish(&event_tx, AppEvent::TranscriptDraftReady { meeting_id: id, path });
+                        }
+                        Err(error) => {
+                            workflow_failure(&event_tx, id, "transcript storage", &error.to_string());
+                            failed_drafts.insert(id);
+                        }
+                    }
+                }
+                Ok(AppEvent::RecordingChunkReady { meeting_id, path }) => {
+                    if let Some(meeting) = meetings.get_mut(&meeting_id) {
+                        meeting.pending_chunks += 1;
+                        queue.push_back((meeting_id, path, settings.clone()));
+                    }
+                }
+                Ok(AppEvent::MeetingEnded { id }) => {
+                    if let Some(meeting) = meetings.get_mut(&id) { meeting.meeting_ended = true; }
+                }
+                Ok(AppEvent::RecordingStarted { meeting_id }) => {
+                    if let Some(meeting) = meetings.get_mut(&meeting_id) { meeting.recording_active = true; }
+                }
+                Ok(AppEvent::RecordingStopped { meeting_id }) => {
+                    if failed_drafts.remove(&meeting_id) { publish(&event_tx, AppEvent::MeetingFinished { meeting_id }); }
+                    if let Some(meeting) = meetings.get_mut(&meeting_id) { meeting.recording_active = false; }
+                }
+                Ok(AppEvent::WorkflowFailed { meeting_id, stage, .. }) if stage == "recording" => {
+                    if let Some(meeting) = meetings.get_mut(&meeting_id) { meeting.failed = true; }
+                }
+                Ok(AppEvent::SummariseTranscriptRequested { path }) => summarise_saved_transcript(&event_tx, path).await,
+                Ok(AppEvent::SettingsChanged(updated)) => settings = updated.validated(),
+                Ok(AppEvent::ShutdownComplete) => break,
+                Ok(_) => {},
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    for (id, meeting) in &mut meetings {
+                        meeting.failed = true;
+                        workflow_failure(&event_tx, *id, "transcription", &format!("lost {skipped} workflow events; recordings retained"));
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            Ok(AppEvent::SettingsChanged(updated_settings)) => {
-                settings = updated_settings.validated();
-            }
-            Ok(AppEvent::QuitRequested) => break,
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                warn!(skipped, "transcription loop lagged behind event bus");
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+        let ready: Vec<Uuid> = meetings
+            .iter()
+            .filter(|(_, meeting)| {
+                meeting.meeting_ended && !meeting.recording_active && meeting.pending_chunks == 0
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ready {
+            finalise_meeting_transcript(&event_tx, &mut meetings, id, settings.clone()).await;
         }
     }
+}
+
+fn workflow_failure(event_tx: &EventSender, id: Uuid, stage: &str, message: &str) {
+    warn!(meeting_id = %id, stage, message, "workflow failed; source material retained");
+    publish(
+        event_tx,
+        AppEvent::WorkflowFailed {
+            meeting_id: id,
+            stage: stage.to_owned(),
+            message: message.to_owned(),
+        },
+    );
 }
 
 async fn finalise_meeting_transcript(
@@ -211,8 +189,8 @@ async fn finalise_meeting_transcript(
         return;
     };
 
-    if is_short_hyprland_false_positive(&meeting) {
-        discard_short_hyprland_false_positive(event_tx, meeting_id, &meeting).await;
+    if meeting.failed {
+        publish(event_tx, AppEvent::MeetingFinished { meeting_id });
         return;
     }
 
@@ -220,7 +198,16 @@ async fn finalise_meeting_transcript(
     if segments.is_empty() {
         if let Some(test_audio_path) = meeting.test_audio_path.clone() {
             segments =
-                transcribe_test_audio(event_tx, &meeting.name, test_audio_path, settings).await;
+                match transcribe_test_audio(event_tx, &meeting.name, test_audio_path, settings)
+                    .await
+                {
+                    Ok(segments) => segments,
+                    Err(error) => {
+                        workflow_failure(event_tx, meeting_id, "transcription", &error);
+                        publish(event_tx, AppEvent::MeetingFinished { meeting_id });
+                        return;
+                    }
+                };
             if let Err(error) = append_segments(&meeting.path, &segments).await {
                 warn!(%error, path = %meeting.path.display(), "failed to append test audio transcript segments");
             }
@@ -244,6 +231,7 @@ async fn finalise_meeting_transcript(
             path = %meeting.path.display(),
             "transcript is empty; skipping summarisation"
         );
+        publish(event_tx, AppEvent::MeetingFinished { meeting_id });
         return;
     }
 
@@ -262,84 +250,41 @@ async fn finalise_meeting_transcript(
     );
 }
 
-fn meeting_duration(meeting: &MeetingTranscript) -> Duration {
-    meeting
-        .ended_at
-        .map(|ended_at| ended_at.duration_since(meeting.started_at))
-        .unwrap_or_else(|| meeting.started_at.elapsed())
-}
-
-fn is_short_hyprland_false_positive(meeting: &MeetingTranscript) -> bool {
-    meeting.source == DetectionSource::Hyprland
-        && meeting_duration(meeting) < MIN_AUTODETECTED_MEETING_DURATION
-}
-
-async fn discard_short_hyprland_false_positive(
-    event_tx: &EventSender,
-    meeting_id: Uuid,
-    meeting: &MeetingTranscript,
-) {
-    info!(
-        meeting_id = %meeting_id,
-        meeting = %meeting.name,
-        duration_secs = meeting_duration(meeting).as_secs_f64(),
-        min_duration_secs = MIN_AUTODETECTED_MEETING_DURATION.as_secs(),
-        path = %meeting.path.display(),
-        "discarding short Hyprland detection as false positive"
-    );
-
-    let transcript_deleted = match fs::remove_file(&meeting.path).await {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(error) => {
-            warn!(%error, path = %meeting.path.display(), "failed to remove false-positive transcript draft");
-            false
-        }
-    };
-
-    if transcript_deleted {
-        publish(
-            event_tx,
-            AppEvent::DocumentDeleted {
-                path: meeting.path.clone(),
-                kind: StoredDocumentKind::Transcript,
-            },
-        );
-    }
-
-    for chunk_path in &meeting.chunk_paths {
-        match fs::remove_file(chunk_path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                warn!(%error, path = %chunk_path.display(), "failed to remove false-positive recording chunk");
-            }
-        }
-    }
-}
-
 async fn create_transcript_draft(meeting_name: &str) -> std::io::Result<PathBuf> {
     let directory = resolve_transcripts_dir()
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
     fs::create_dir_all(&directory).await?;
 
     let file_name = format!(
-        "{}_{}.txt",
+        "{}_{}_{}.txt",
         unix_timestamp_seconds(),
+        Uuid::new_v4(),
         safe_filename(meeting_name)
     );
     let path = directory.join(file_name);
-    fs::write(&path, "").await?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .await?;
     Ok(path)
 }
 
 async fn transcribe_audio_chunk(
     path: PathBuf,
     settings: Settings,
-) -> Result<Vec<TranscriptSegment>, String> {
-    tokio::task::spawn_blocking(move || transcribe_audio_chunk_blocking(&path, &settings))
-        .await
-        .map_err(|error| format!("transcription worker failed: {error}"))?
+) -> Result<(Vec<TranscriptSegment>, u64), String> {
+    tokio::task::spawn_blocking(move || {
+        let reader = hound::WavReader::open(&path)
+            .map_err(|error| format!("failed to open WAV: {error}"))?;
+        let duration_ms =
+            u64::from(reader.duration()) * 1000 / u64::from(reader.spec().sample_rate.max(1));
+        let segments = transcribe_audio_chunk_blocking(&path, &settings)?;
+        Ok((segments, duration_ms))
+    })
+    .await
+    .map_err(|error| format!("transcription worker failed: {error}"))?
 }
 
 fn transcribe_audio_chunk_blocking(
@@ -360,35 +305,24 @@ async fn transcribe_test_audio(
     meeting_name: &str,
     path: PathBuf,
     settings: Settings,
-) -> Vec<TranscriptSegment> {
-    if fixture_is_transcript(&path) {
-        info!(path = %path.display(), "loading deterministic transcript fixture");
-        return match fs::read_to_string(&path).await {
-            Ok(transcript) => transcript_segments(transcript),
-            Err(error) => {
-                let error = format!("failed to read transcript fixture: {error}");
-                warn!(%error, path = %path.display(), "failed to load transcript fixture");
-                publish(
-                    event_tx,
-                    transcription_failure_notification(meeting_name, &error),
-                );
-                vec![recording_fallback_segment(&path, &error)]
-            }
-        };
+) -> Result<Vec<TranscriptSegment>, String> {
+    let result = if fixture_is_transcript(&path) {
+        fs::read_to_string(&path)
+            .await
+            .map(transcript_segments)
+            .map_err(|error| format!("failed to read transcript fixture: {error}"))
+    } else {
+        transcribe_audio_chunk(path, settings)
+            .await
+            .map(|(segments, _)| segments)
+    };
+    if let Err(error) = &result {
+        publish(
+            event_tx,
+            transcription_failure_notification(meeting_name, error),
+        );
     }
-
-    info!(path = %path.display(), "transcribing test audio fixture");
-    match transcribe_audio_chunk(path.clone(), settings).await {
-        Ok(segments) => segments,
-        Err(error) => {
-            warn!(%error, path = %path.display(), "failed to transcribe test audio fixture");
-            publish(
-                event_tx,
-                transcription_failure_notification(meeting_name, &error),
-            );
-            vec![recording_fallback_segment(&path, &error)]
-        }
-    }
+    result
 }
 
 fn transcription_failure_notification(meeting_name: &str, error: &str) -> AppEvent {
@@ -405,13 +339,12 @@ fn transcribe_with_whisper(
     path: &Path,
     settings: &Settings,
 ) -> Result<Vec<TranscriptSegment>, String> {
-    let model_path = resolve_whisper_model_path(settings)?;
-
     let audio = read_wav_as_whisper_audio(path)?;
     if audio.is_empty() {
         return Ok(Vec::new());
     }
 
+    let model_path = resolve_whisper_model_path(settings)?;
     let audio_duration_secs = audio.len() as f64 / f64::from(WHISPER_SAMPLE_RATE);
     info!(
         path = %path.display(),
@@ -684,18 +617,6 @@ async fn append_segments(path: &Path, segments: &[TranscriptSegment]) -> std::io
     file.write_all(content.as_bytes()).await
 }
 
-fn recording_fallback_segment(path: &Path, error: &str) -> TranscriptSegment {
-    TranscriptSegment {
-        start_ms: 0,
-        end_ms: 0,
-        text: format!(
-            "Audio was recorded at {}, but speech transcription was not available: {}",
-            path.display(),
-            error
-        ),
-    }
-}
-
 fn transcript_segments(transcript: String) -> Vec<TranscriptSegment> {
     let cleaned = transcript.trim().to_owned();
     if cleaned.is_empty() {
@@ -728,10 +649,9 @@ async fn summarise_saved_transcript(event_tx: &EventSender, path: PathBuf) {
     let meeting_name = meeting_name_from_path(&path);
     publish(
         event_tx,
-        AppEvent::MeetingStarted {
-            id: meeting_id,
+        AppEvent::TranscriptImported {
+            meeting_id,
             name: meeting_name,
-            source: DetectionSource::Manual,
         },
     );
     publish(
@@ -749,6 +669,7 @@ fn meeting_name_from_path(path: &Path) -> String {
     };
 
     let title_fragment = stem.split_once('_').map(|(_, value)| value).unwrap_or(stem);
+    let title_fragment = rustle_core::paths::strip_document_id(title_fragment);
     let title = title_fragment
         .split('_')
         .filter(|part| !part.is_empty())
@@ -889,7 +810,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spec_018_missing_transcript_fixture_returns_fallback_and_notification() {
+    async fn spec_018_missing_transcript_fixture_returns_error_and_notification() {
         let bus = rustle_core::EventBus::new();
         let event_tx = bus.sender();
         let mut observer = bus.subscribe();
@@ -906,15 +827,8 @@ mod tests {
         )
         .await;
 
-        assert_eq!(segments.len(), 1);
-        assert!(segments[0]
-            .text
-            .contains("speech transcription was not available"));
-        assert!(segments[0]
-            .text
-            .contains(&missing_path.display().to_string()));
-        assert!(segments[0]
-            .text
+        assert!(segments
+            .unwrap_err()
             .contains("failed to read transcript fixture"));
 
         let AppEvent::NotificationRequested {
@@ -953,67 +867,8 @@ mod tests {
     }
 
     #[test]
-    fn recording_fallback_segment_includes_path_and_error() {
-        let path = std::path::Path::new("/tmp/test-recording.wav");
-        let error = "model not found";
-        let segment = recording_fallback_segment(path, error);
-
-        assert!(segment.text.contains("/tmp/test-recording.wav"));
-        assert!(segment.text.contains("model not found"));
-    }
-
-    #[test]
     fn meeting_name_from_path_handles_missing_extension() {
         let name = meeting_name_from_path(std::path::Path::new("/tmp/1234567890_meeting"));
         assert_eq!(name, "meeting");
-    }
-
-    #[test]
-    fn spec_028_short_hyprland_detection_is_treated_as_false_positive() {
-        let meeting = MeetingTranscript {
-            name: "Short auto-detected meeting".to_owned(),
-            path: PathBuf::from("/tmp/short-auto-detected-meeting.txt"),
-            segments: Vec::new(),
-            chunk_paths: Vec::new(),
-            source: DetectionSource::Hyprland,
-            started_at: Instant::now(),
-            ended_at: Some(Instant::now()),
-            test_audio_path: None,
-            recording_active: false,
-            meeting_ended: true,
-        };
-
-        assert!(is_short_hyprland_false_positive(&meeting));
-    }
-
-    #[test]
-    fn spec_028_manual_and_long_hyprland_meetings_are_not_false_positives() {
-        let manual_meeting = MeetingTranscript {
-            name: "Manual meeting".to_owned(),
-            path: PathBuf::from("/tmp/manual-meeting.txt"),
-            segments: Vec::new(),
-            chunk_paths: Vec::new(),
-            source: DetectionSource::Manual,
-            started_at: Instant::now(),
-            ended_at: Some(Instant::now()),
-            test_audio_path: None,
-            recording_active: false,
-            meeting_ended: true,
-        };
-        assert!(!is_short_hyprland_false_positive(&manual_meeting));
-
-        let long_hyprland_meeting = MeetingTranscript {
-            name: "Long auto-detected meeting".to_owned(),
-            path: PathBuf::from("/tmp/long-auto-detected-meeting.txt"),
-            segments: Vec::new(),
-            chunk_paths: Vec::new(),
-            source: DetectionSource::Hyprland,
-            started_at: Instant::now() - MIN_AUTODETECTED_MEETING_DURATION - Duration::from_secs(1),
-            ended_at: Some(Instant::now()),
-            test_audio_path: None,
-            recording_active: false,
-            meeting_ended: true,
-        };
-        assert!(!is_short_hyprland_false_positive(&long_hyprland_meeting));
     }
 }

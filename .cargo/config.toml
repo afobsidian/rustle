@@ -1,0 +1,13 @@
+[resolver]
+incompatible-rust-versions = "fallback"
+
+# Fixed local-inference baseline; never inherit the build machine's CPU features.
+[env]
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"
+GGML_SSE42 = "ON"
+GGML_AVX512 = "OFF"

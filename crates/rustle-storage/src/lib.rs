@@ -32,6 +32,12 @@ async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
             Ok(AppEvent::MeetingStarted { id, name, .. }) => {
                 meeting_names.insert(id, name);
             }
+            Ok(AppEvent::TranscriptImported { meeting_id, name }) => {
+                meeting_names.insert(meeting_id, name);
+            }
+            Ok(AppEvent::MeetingFinished { meeting_id }) => {
+                meeting_names.remove(&meeting_id);
+            }
             Ok(AppEvent::SummarisationReady { meeting_id, notes }) => {
                 let meeting_name = meeting_names
                     .remove(&meeting_id)
@@ -41,8 +47,19 @@ async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
                         info!(path = %path.display(), "meeting notes written");
                         publish(&event_tx, AppEvent::NoteSaved { meeting_id, path });
                     }
-                    Err(error) => warn!(%error, meeting_id = %meeting_id, "failed to save notes"),
+                    Err(error) => {
+                        warn!(%error, meeting_id = %meeting_id, "failed to save notes");
+                        publish(
+                            &event_tx,
+                            AppEvent::WorkflowFailed {
+                                meeting_id,
+                                stage: "note storage".to_owned(),
+                                message: error.to_string(),
+                            },
+                        );
+                    }
                 }
+                publish(&event_tx, AppEvent::MeetingFinished { meeting_id });
             }
             Ok(AppEvent::DeleteDocumentRequested { path, kind }) => {
                 match delete_document(&settings, kind, &path).await {
@@ -58,7 +75,7 @@ async fn storage_loop(event_tx: EventSender, mut event_rx: EventReceiver) {
             Ok(AppEvent::SettingsChanged(updated_settings)) => {
                 settings = updated_settings.validated();
             }
-            Ok(AppEvent::QuitRequested) => break,
+            Ok(AppEvent::ShutdownComplete) => break,
             Ok(_) => {}
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                 warn!(skipped, "storage loop lagged behind event bus");
@@ -89,12 +106,28 @@ async fn save_notes(
     fs::create_dir_all(&directory).await?;
 
     let file_name = format!(
-        "{}_{}.md",
+        "{}_{}_{}.md",
         unix_timestamp_seconds(),
+        uuid::Uuid::new_v4(),
         safe_filename(meeting_name)
     );
     let path = directory.join(file_name);
-    fs::write(&path, render_markdown(notes)).await?;
+    use std::os::unix::fs::OpenOptionsExt;
+    use tokio::io::AsyncWriteExt;
+    let pending = path.with_extension("md.pending");
+    let result = async {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = fs::File::from_std(options.open(&pending)?);
+        file.write_all(render_markdown(notes).as_bytes()).await?;
+        file.sync_all().await?;
+        fs::rename(&pending, &path).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_file(&pending).await;
+    }
+    result?;
     Ok(path)
 }
 
@@ -182,7 +215,7 @@ fn parse_document(path: PathBuf, kind: StoredDocumentKind) -> Option<StoredDocum
     let (timestamp, title_fragment) = match stem.split_once('_') {
         Some((timestamp, title_fragment)) => (
             timestamp.parse::<u64>().unwrap_or(0),
-            humanise_title(title_fragment),
+            humanise_title(rustle_core::paths::strip_document_id(title_fragment)),
         ),
         None => (0, humanise_title(stem)),
     };
@@ -365,5 +398,39 @@ mod tests {
     #[test]
     fn humanise_title_converts_underscores_to_spaces() {
         assert_eq!(humanise_title("team_sync"), "team sync");
+    }
+
+    #[tokio::test]
+    async fn repeated_titles_do_not_overwrite_notes() {
+        let sandbox = unique_sandbox("note-collision");
+        let mut settings = Settings::default();
+        settings.storage.notes_dir = sandbox.to_string_lossy().into_owned();
+        let notes = MeetingNotes {
+            summary: "Approved".into(),
+            key_decisions: vec![],
+            action_items: vec![],
+            attendees: vec![],
+            markdown: "# Approved".into(),
+        };
+        let (first, second) = tokio::join!(
+            save_notes(&settings, "Same title", &notes),
+            save_notes(&settings, "Same title", &notes)
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first, second);
+        assert_eq!(list_notes(&settings).await.unwrap().len(), 2);
+        assert_eq!(
+            parse_document(first, StoredDocumentKind::Note)
+                .unwrap()
+                .title,
+            "Same title"
+        );
+        assert!(!std::fs::read_dir(&sandbox).unwrap().any(|entry| entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|ext| ext == "pending")));
+        std::fs::remove_dir_all(sandbox).unwrap();
     }
 }

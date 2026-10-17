@@ -22,6 +22,18 @@ pub async fn initialise(event_rx: Option<EventReceiver>) -> Result<(), CoreError
     Ok(())
 }
 
+pub(crate) async fn setup_notice(title: &str, body: &str) {
+    dispatch_notification(
+        NotificationPayload {
+            title: title.to_owned(),
+            body: body.to_owned(),
+            urgency: NotificationUrgency::Normal,
+        },
+        deliver_notification,
+    )
+    .await;
+}
+
 async fn notification_loop(mut event_rx: EventReceiver) {
     let mut meeting_names = HashMap::new();
 
@@ -71,7 +83,19 @@ async fn notification_loop(mut event_rx: EventReceiver) {
                 )
                 .await;
             }
-            Ok(AppEvent::QuitRequested) => break,
+            Ok(AppEvent::WorkflowFailed { stage, message, .. }) => {
+                warn!(%stage, %message, "workflow failed; source material retained");
+                dispatch_notification(
+                    NotificationPayload {
+                        title: format!("Rustle {stage} failed"),
+                        body: format!("{message} Recordings and drafts are retained."),
+                        urgency: NotificationUrgency::Critical,
+                    },
+                    deliver_notification,
+                )
+                .await;
+            }
+            Ok(AppEvent::ShutdownComplete) => break,
             Ok(_) => {}
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                 warn!(skipped, "desktop notification loop lagged behind event bus");
@@ -86,7 +110,7 @@ fn meeting_started_notification(
     source: DetectionSource,
 ) -> NotificationPayload {
     let (title, body) = match source {
-        DetectionSource::Hyprland => (
+        DetectionSource::Hyprland | DetectionSource::TeamsDbus => (
             "Meeting detected",
             format!("Rustle detected {meeting_name} in Microsoft Teams."),
         ),

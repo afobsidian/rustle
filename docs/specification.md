@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD024 -->
 
-> Platform: Linux (Fedora / Hyprland)  
+> Platform: x86-64 Linux (obsidian-blue / Fedora / Arch, Hyprland)
 > Language: Rust  
 > Purpose: AI-powered meeting notes app with system tray presence and Teams detection
 
@@ -73,7 +73,7 @@ The app must support enabling/disabling automatic startup on login via the XDG a
 - [x] `general.start_on_login = true` with `general.start_on_login_method = "xdg"` creates `~/.config/autostart/rustle.desktop`
 - [x] Disabling start-on-login removes the managed autostart artifacts
 - [x] The XDG desktop file includes `Type=Application`, `Exec=<current rustle executable>`, and `X-GNOME-Autostart-enabled=true`
-- [x] `general.start_on_login_method = "systemd"` writes `~/.config/systemd/user/rustle.service` and the matching `default.target.wants` symlink
+- [x] `general.start_on_login_method = "systemd"` writes `~/.config/systemd/user/rustle.service` and the matching `graphical-session.target.wants` symlink
 - [x] Switching methods removes stale artifacts from the other integration path
 
 #### Technical Notes
@@ -303,7 +303,8 @@ detection_method = "hyprland"
 
 [audio]
 input_device = "default"
-capture_loopback = false
+capture_loopback = true
+output_device = "default"
 max_recording_size_mb = 2048
 chunk_duration_minutes = 10
 
@@ -623,24 +624,11 @@ Rustle's file-backed workflow should integrate with the desktop opener first, th
 
 ## 5. Test Strategy
 
-| Spec     | Unit / crate-local coverage                    | Integration / release-contract coverage     | Manual                         |
-| -------- | ---------------------------------------------- | ------------------------------------------- | ------------------------------ |
-| SPEC-001 | Tray registration mock                         | DBus roundtrip test                         | Visual tray check              |
-| SPEC-002 | File write/delete                              | Desktop file parse                          | Login smoke test               |
-| SPEC-004 | Detection logic unit tests                     | Hyprland socket mock                        | Live Teams call                |
-| SPEC-005 | Audio buffer chunking                          | Recorder process handling                   | Record + playback              |
-| SPEC-006 | Segment parsing and model-path rules           | Deterministic WAV / transcript-fixture flow | Transcribe sample WAV          |
-| SPEC-007 | Prompt construction and fallback-note shaping  | Provider fallback contract                  | Review generated notes         |
-| SPEC-009 | TOML parse/validate                            | Config round-trip                           | Settings UI smoke              |
-| SPEC-017 | Detection state transitions                    | Socket reconnect / polling fallback         | Hyprland restart smoke         |
-| SPEC-018 | Storage safety and fallback notifications      | Cross-crate fallback persistence behavior   | Failure-path review            |
-| SPEC-021 | N/A                                            | End-to-end manual workflow contract         | Manual release smoke           |
-| SPEC-022 | Detection title filtering                      | False-positive meeting guard                | Teams chat/title review        |
-| SPEC-023 | Transcript empty guards                        | Empty transcript no-op contract             | Empty-draft smoke              |
-| SPEC-024 | N/A                                            | Final recording chunk ordering contract     | End-meeting while recording    |
-| SPEC-025 | Open-target selection helpers                  | N/A                                         | `open` / `notes` routing smoke |
-| SPEC-026 | Tray menu grouping and document action menus   | N/A                                         | Review & Edit tray smoke       |
-| SPEC-027 | Settings bootstrap and opener command ordering | N/A                                         | Settings/opener smoke          |
+Fast checks, installed desktop tests, real audio/inference acceptance, and packaging
+checks are all required. See [DevOps](devops.md) for the current executable matrix,
+artifact locations, and regression traceability. No manual post-install test is a
+release prerequisite. Missing required desktop capabilities fail rather than skip.
+
 
 ---
 
@@ -660,3 +648,57 @@ Rustle's file-backed workflow should integrate with the desktop opener first, th
 12. **SPEC-012** – Hardening pass
 
 Later specs such as **SPEC-017** through **SPEC-027** extend the original roadmap with hardening and workflow-alignment expectations for the current architecture.
+
+
+## Release contracts added in 0.0.3
+
+These supersede earlier title-only desktop detection and manual smoke procedures.
+
+### SPEC-028 · Retain short meetings
+
+Every completed short meeting retains its draft and captured recordings. The old
+five-minute false-positive deletion rule is removed. False triggers are rejected
+at detection. `tests/spec_028_short_hyland_false_positive.rs` now proves retention.
+
+### Teams for Linux and recording
+
+Teams for Linux >=2.25.0 with D-Bus enabled is required for desktop automatic
+capture. Its selected-profile inCall state controls recording. Hyprland titles
+supply names and preserve browser compatibility. Window visibility and microphone
+mute do not represent a call ending; malformed snapshots do not terminate an
+observed call while its bus owner remains present.
+
+Fresh audio settings include microphone + selected output capture, with
+output_device="default" and capture_loopback=true. Existing explicit preferences
+remain valid. The temporary PipeWire graph must clean up on completion and follow
+default-device changes. Completed chunks must contain parseable audio data.
+
+### SPEC-024 · Recording completion and failure
+
+Transcription always waits for audio's RecordingStopped acknowledgement, including
+end-before-readiness and capture-start failures. Chunk work remains responsive to
+lifecycle events. Failed transcription never becomes fake recognised speech.
+WorkflowFailed distinguishes errors and fallback notes from successful processing.
+MeetingFinished acknowledges terminal processing; ShutdownComplete is sent only
+after normal shutdown has drained pending work.
+
+### Setup, installation, and release acceptance
+
+Setup merges Teams configuration safely, provisions pinned SHA-256 verified local
+models atomically, and records readiness only after a private synthetic
+capture-to-note test passes. This test must not access physical microphones or
+change host audio routing. It checks both speech sources, device switching,
+rotation, factual decisions/action items, short-meeting retention, quit draining,
+and graph cleanup. Fallback notes fail its success path.
+
+Distribution archives, RPMs, and Arch packages include the binary, icons, desktop
+entry, and graphical-session user unit. Installed tests run outside the checkout
+on obsidian-blue, Fedora, and Arch; release publication requires every gate and
+matching tested binary identities. The obsidian-blue image verifies its pinned
+release and honours user startup disablement. Authenticated Microsoft calls and
+physical hardware remain outside the automated headless coverage boundary.
+
+### SPEC-029 · Import without recording
+
+Re-summarising a saved transcript publishes TranscriptImported and TranscriptionReady,
+never MeetingStarted. `tests/spec_029_import_without_capture.rs` proves this boundary.

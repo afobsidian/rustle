@@ -83,6 +83,8 @@ pub enum RecordingDetectionMethod {
 pub struct AudioSettings {
     /// Capture input device name.
     pub input_device: String,
+    /// PipeWire output node name, or `default` to follow the default output.
+    pub output_device: String,
     /// Whether to capture from a loopback device.
     pub capture_loopback: bool,
     /// Maximum recording size in megabytes before rotation.
@@ -297,7 +299,8 @@ impl Default for AudioSettings {
     fn default() -> Self {
         Self {
             input_device: "default".to_owned(),
-            capture_loopback: false,
+            output_device: "default".to_owned(),
+            capture_loopback: true,
             max_recording_size_mb: 2048,
             chunk_duration_minutes: 10,
         }
