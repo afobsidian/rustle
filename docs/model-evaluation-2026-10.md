@@ -101,7 +101,7 @@ It is also the compact default for fresh configurations.
 Accuracy takes priority over latency for this installation. The smaller Qwen
 was faster but its factual errors make it unsuitable for this meeting. Gemma
 completed reliably, but factual review still found proposals listed as decisions
-and an unsupported attendee inference. It is not an established accuracy winner.
+and an unsupported attendee inference. Those draft errors still need review.
 The earlier 4B trials were stopped for latency before this preference was known.
 The completed Qwen3.5 4B replay produced useful topic coverage, but assigned
 actions to speakers whose ownership was not established and included an absent
