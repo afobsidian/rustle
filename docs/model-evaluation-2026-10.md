@@ -3,8 +3,12 @@
 The previous provider benchmark uses a three-sentence transcript and a 30-second
 timeout. That does not establish reliability or latency for an hour-long meeting.
 Its Tokio timeout also cannot cancel an already-running blocking native inference
-call. These trials therefore run in separate processes, with only one model
-evaluating at a time.
+call. Candidate replays therefore run serially in separate processes.
+The live Rustle service remains enabled: during the 9B replay it also recorded,
+transcribed and summarised another meeting. All benchmark threads were lowered
+to nice 10 to favour that workflow. The 9B timing includes contention and is not
+a controlled speed comparison. Timings come from the local test harness and are
+not a release-build performance guarantee.
 This evaluation uses the same retained 772-segment, 45,859-character transcript
 that triggered a repetitive-output failure. Private meeting text and generated
 notes stay outside the repository.
@@ -51,6 +55,7 @@ accuracy score.
 | Qwen2.5 3B, original greedy | Repetitive-output failure after 1,567 seconds in production. |
 | Qwen2.5 3B, corrected sampling | Stopped at 900 seconds; build contention makes latency inconclusive. |
 | Qwen3 4B Instruct | Stopped at 903 seconds while evaluating the prompt; no quality result. |
+| Qwen3.5 9B, non-thinking | Completed in 3,641.33 seconds (2,664.38 prompt evaluation), under live-workflow contention; format passed, but reversed an explicit agreement and misstated priorities. |
 | Qwen3.5 4B, non-thinking | Initial trial stopped at 988 seconds. Revised-prompt replay completed in 1,522.53 active seconds (1,206.74 prompt evaluation); useful summary, but unsupported action ownership and attendance. |
 | Gemma 4 E2B IT, non-thinking | Completed in 826.70 seconds (685.82 prompt evaluation); supported follow-ups, but proposals/attendance needed tighter instructions. |
 | Qwen3.5 2B, non-thinking | Completed in 511.55 seconds (392.71 prompt evaluation); format passed; substantial unsupported claims. Not recommended for this transcript. |
@@ -86,10 +91,12 @@ content review are required before changing the default model.
 
 ## Recommendation and limits
 
-Gemma 4 E2B IT Q4_K_M is the compact default for fresh configurations: it
-completed this meeting without repetition and produced a useful draft, with
-less active processing time than the completed 4B trial. This is a practical
-compact default, not a claim that it has the highest possible accuracy.
+Recommend Gemma 4 E2B IT Q4_K_M for this laptop, including the stated
+accuracy-first preference. It produced the most useful draft among the completed
+trials: its core agreement was preserved, while the larger 9B candidate reversed
+that agreement and misstated priorities. This is a qualitative choice from one
+meeting, not a claim that the smaller model is universally more accurate.
+It is also the compact default for fresh configurations.
 
 Accuracy takes priority over latency for this installation. The smaller Qwen
 was faster but its factual errors make it unsuitable for this meeting. Gemma
@@ -98,7 +105,11 @@ and an unsupported attendee inference. It is not an established accuracy winner.
 The earlier 4B trials were stopped for latency before this preference was known.
 The completed Qwen3.5 4B replay produced useful topic coverage, but assigned
 actions to speakers whose ownership was not established and included an absent
-person in attendees. A larger Qwen3.5 9B replay is being evaluated for accuracy.
+person in attendees. The Qwen3.5 9B replay also completed without repetition,
+but reversed an explicit agreement, invented or misstated prioritisation decisions,
+and inferred unsupported owners and attendees. Its greater size did not improve
+this draft enough to recommend it over Gemma. That judgement concerns content;
+its contended runtime is not used to rank accuracy or compare speed.
 
 The prompt now explicitly separates proposals from decisions, preserves tentative
 timing, and excludes absent or merely mentioned people from attendees. A real
