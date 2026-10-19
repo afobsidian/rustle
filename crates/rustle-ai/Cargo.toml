@@ -24,6 +24,9 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
 [[example]]
 name = "provider_bench"
 path = "examples/provider_bench.rs"

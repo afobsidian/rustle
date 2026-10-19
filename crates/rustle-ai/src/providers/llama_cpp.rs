@@ -69,7 +69,7 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
     }
 
     let user_prompt = format!(
-        "Create meeting notes from this transcript. Return Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees. Keep each section concise and factual. Do not infer topics, decisions, attendees, or action items that are not explicitly present in the transcript. Explicit approvals and agreements are decisions: include them under Key Decisions, even when also mentioned in Summary. Ignore icebreakers, jokes, setup chatter, non-speech annotations, and social examples unless they create a real decision or action item. Use 'None captured.' for Key Decisions or Action Items only when none are explicit. For action items, include owner and timing only when stated. Do not include any Transcript section or transcript breakdown.\n\nTranscript:\n{}",
+        "Create meeting notes from this transcript. Return Markdown with exactly these headings: Summary, Key Decisions, Action Items, Attendees. Keep each section concise and factual. Do not infer topics, decisions, attendees, or action items that are not explicitly present in the transcript. Explicit approvals and agreements are decisions: include them under Key Decisions, even when also mentioned in Summary. Put proposals, preferences and unresolved discussions in Summary, never present them as approved decisions or assigned actions. Ignore icebreakers, jokes, setup chatter, non-speech annotations, and social examples unless they create a real decision or action item. Use 'None captured.' for Key Decisions or Action Items only when none are explicit. For action items, include owner and timing only when stated; preserve tentative timing as tentative. For Attendees, include only explicitly identified speakers or people directly addressed, never absent people or people merely mentioned. If attendance is unclear, write 'Not identified.' Do not include any Transcript section or transcript breakdown.\n\nTranscript:\n{}",
         transcript.trim()
     );
 
@@ -79,6 +79,12 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
     let model_path = model_path(settings)?;
     let model = LlamaModel::load_from_file(backend, model_path, &LlamaModelParams::default())
         .map_err(|error| error.to_string())?;
+    let architecture = model
+        .meta_val_str("general.architecture")
+        .unwrap_or_default();
+    let qwen35 = architecture == "qwen35";
+    let gemma4 = architecture == "gemma4";
+    let small_qwen35 = qwen35 && model.n_params() < 3_000_000_000;
     let prompt = render_prompt(&model, settings.ai.system_prompt.trim(), &user_prompt)?;
 
     let vocab = model.vocab();
@@ -113,16 +119,47 @@ fn summarise_blocking(settings: &Settings, transcript: &str) -> Result<String, S
             .add(token, index, &[0], index == last_index)
             .map_err(|error| error.to_string())?;
     }
+    let started = std::time::Instant::now();
+    tracing::info!(prompt_token_count, "evaluating notes prompt");
     ctx.decode(&mut batch).map_err(|error| error.to_string())?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "notes prompt evaluated"
+    );
 
     let mut decoder = encoding_rs::UTF_8.new_decoder();
-    // Keep required sections present without penalising repeated facts or deadlines.
+    // Constrain structure while sampling with repetition protection instead of greedy decoding.
     let grammar = r##"root ::= "# Meeting Notes\n\n## Summary\n" section "\n## Key Decisions\n" section "\n## Action Items\n" section "\n## Attendees\n" section
 section ::= [^\x00#]+
 "##;
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::grammar(&model, grammar, "root").map_err(|error| error.to_string())?,
-        LlamaSampler::greedy(),
+        LlamaSampler::penalties(
+            vocab.n_tokens(),
+            MAX_GENERATION_TOKENS,
+            if qwen35 || gemma4 { 1.0 } else { 1.05 },
+            0.0,
+            if small_qwen35 {
+                2.0
+            } else if qwen35 {
+                1.5
+            } else {
+                0.0
+            },
+        ),
+        LlamaSampler::top_k(if gemma4 { 64 } else { 20 }),
+        LlamaSampler::top_p(
+            if small_qwen35 {
+                1.0
+            } else if gemma4 {
+                0.95
+            } else {
+                0.8
+            },
+            1,
+        ),
+        LlamaSampler::temp(if small_qwen35 || gemma4 { 1.0 } else { 0.7 }),
+        LlamaSampler::dist(42),
     ]);
     let mut output = String::new();
     let mut current_tokens = batch.n_tokens();
@@ -148,6 +185,12 @@ section ::= [^\x00#]+
             .map_err(|error| error.to_string())?;
         ctx.decode(&mut batch).map_err(|error| error.to_string())?;
         current_tokens += 1;
+        if (current_tokens - prompt_token_count) % 128 == 0 {
+            tracing::info!(
+                generated_tokens = current_tokens - prompt_token_count,
+                "notes generation progress"
+            );
+        }
     }
 
     if output.trim().is_empty() {
@@ -218,6 +261,18 @@ fn render_prompt(
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<String, String> {
+    // The string-only template API lacks the Gemma 4 E2B/E4B non-thinking format.
+    if model
+        .meta_val_str("general.architecture")
+        .is_ok_and(|architecture| architecture == "gemma4")
+        && model.n_params() < 10_000_000_000
+    {
+        return Ok(format!(
+            "<bos><|turn>system\n{}<turn|>\n<|turn>user\n{}<turn|>\n<|turn>model\n",
+            system_prompt.trim(),
+            user_prompt.trim()
+        ));
+    }
     let template = model
         .chat_template(None)
         .map_err(|error| error.to_string())?;
@@ -228,9 +283,17 @@ fn render_prompt(
             .map_err(|error| error.to_string())?,
     ];
 
-    model
+    let mut prompt = model
         .apply_chat_template(&template, &messages, true)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // The string-only llama.cpp template API does not evaluate enable_thinking=false.
+    if model
+        .meta_val_str("general.architecture")
+        .is_ok_and(|architecture| architecture == "qwen35")
+    {
+        prompt.push_str("<think>\n\n</think>\n\n");
+    }
+    Ok(prompt)
 }
 
 #[cfg(feature = "provider-llama-cpp")]
@@ -357,6 +420,69 @@ fn strip_outer_code_fences(output: &str) -> String {
 #[cfg(all(test, feature = "provider-llama-cpp"))]
 mod tests {
     use super::normalise_markdown;
+
+    #[test]
+    fn repetition_guard_keeps_failures_visible_without_rejecting_empty_sections() {
+        assert!(super::looks_degenerate(
+            "## Summary\nRepeated line\nRepeated line\nRepeated line\nRepeated line"
+        ));
+        assert!(!super::looks_degenerate("# Meeting Notes\n## Summary\nA discussion.\n## Key Decisions\nNone captured.\n## Action Items\nNone captured.\n## Attendees\nUnknown."));
+    }
+
+    #[test]
+    #[ignore = "requires RUSTLE_TEST_MODEL path"]
+    fn local_model_keeps_proposals_and_absentees_out_of_decisions_and_attendees() {
+        let mut settings = rustle_core::Settings::default();
+        settings.ai.model_path = std::env::var("RUSTLE_TEST_MODEL").unwrap();
+        let markdown = super::summarise_blocking(&settings, "Alex: Hi Priya. Morgan is absent today.\nPriya: Maybe we could hold a workshop on Friday.\nAlex: That workshop is only a proposal; we have not agreed to it. We approve keeping SQLite for the database.\nPriya: Agreed on SQLite. I will send the report tomorrow.").unwrap().to_lowercase();
+        let decisions = markdown
+            .split("## key decisions")
+            .nth(1)
+            .unwrap()
+            .split("## action items")
+            .next()
+            .unwrap();
+        let actions = markdown
+            .split("## action items")
+            .nth(1)
+            .unwrap()
+            .split("## attendees")
+            .next()
+            .unwrap();
+        let attendees = markdown.split("## attendees").nth(1).unwrap();
+        assert!(decisions.contains("sqlite"));
+        assert!(!decisions.contains("workshop"));
+        assert!(
+            actions.contains("priya") && actions.contains("report") && actions.contains("tomorrow")
+        );
+        assert!(attendees.contains("alex") && attendees.contains("priya"));
+        assert!(!attendees.contains("morgan"));
+    }
+
+    #[test]
+    #[ignore = "requires RUSTLE_TEST_MODEL, RUSTLE_TEST_TRANSCRIPT and RUSTLE_TEST_NOTES paths"]
+    fn saved_transcript_produces_real_notes() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_test_writer()
+            .try_init();
+        let mut settings = rustle_core::Settings::default();
+        settings.ai.model_path = std::env::var("RUSTLE_TEST_MODEL").unwrap();
+        let transcript =
+            std::fs::read_to_string(std::env::var("RUSTLE_TEST_TRANSCRIPT").unwrap()).unwrap();
+        let started = std::time::Instant::now();
+        let markdown = super::summarise_blocking(&settings, &transcript).unwrap();
+        eprintln!(
+            "model={} input_chars={} output_chars={} elapsed_secs={:.2}",
+            settings.ai.model_path,
+            transcript.chars().count(),
+            markdown.chars().count(),
+            started.elapsed().as_secs_f64()
+        );
+        assert!(!super::looks_degenerate(&markdown));
+        assert!(super::is_acceptable_markdown(&markdown));
+        std::fs::write(std::env::var("RUSTLE_TEST_NOTES").unwrap(), markdown).unwrap();
+    }
 
     #[test]
     fn accepts_bold_section_labels_from_model_output() {

@@ -1781,7 +1781,7 @@ dependencies = [
 
 [[package]]
 name = "rustle"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "anyhow",
  "nix",
@@ -1813,6 +1813,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
