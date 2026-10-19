@@ -239,6 +239,22 @@ fn preferred_editor_command(path: &Path) -> std::io::Result<Option<CommandLine>>
 async fn spawn_command(command_line: CommandLine) -> std::io::Result<()> {
     let mut command = Command::new(&command_line.program);
     command.args(&command_line.args);
+    // Login services can start before the compositor imports its display environment.
+    if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        if let Ok(Ok(output)) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Command::new("systemctl")
+                .args(["--user", "show-environment", "--output=json"])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        {
+            if output.status.success() {
+                command.envs(desktop_environment(&output.stdout));
+            }
+        }
+    }
     let status = command.spawn()?.wait().await?;
 
     if status.success() {
@@ -251,6 +267,28 @@ async fn spawn_command(command_line: CommandLine) -> std::io::Result<()> {
     }
 }
 
+fn desktop_environment(environment: &[u8]) -> Vec<(String, String)> {
+    let Ok(environment) =
+        serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(environment)
+    else {
+        return Vec::new();
+    };
+    environment
+        .into_iter()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "DISPLAY"
+                    | "WAYLAND_DISPLAY"
+                    | "XAUTHORITY"
+                    | "XDG_CURRENT_DESKTOP"
+                    | "XDG_SESSION_TYPE"
+            )
+        })
+        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_owned())))
+        .collect()
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct CommandLine {
     program: OsString,
@@ -260,13 +298,65 @@ struct CommandLine {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_settings_file_at, open_command_candidates, preferred_editor_command,
-        select_notes_open_target, CommandLine,
+        desktop_environment, ensure_settings_file_at, open_command_candidates,
+        preferred_editor_command, select_notes_open_target, spawn_command, CommandLine,
     };
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     static EDITOR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn imports_only_desktop_variables_without_shell_evaluation() {
+        assert_eq!(
+            desktop_environment(br#"{"DISPLAY":":0","WAYLAND_DISPLAY":"wayland-1","XAUTHORITY":"/tmp/auth=a b","LD_PRELOAD":"/tmp/unsafe.so"}"#),
+            vec![
+                ("DISPLAY".to_owned(), ":0".to_owned()),
+                ("WAYLAND_DISPLAY".to_owned(), "wayland-1".to_owned()),
+                ("XAUTHORITY".to_owned(), "/tmp/auth=a b".to_owned()),
+            ]
+        );
+        assert!(desktop_environment(b"not json").is_empty());
+    }
+
+    #[test]
+    fn opener_recovers_display_environment_for_early_login_service() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = EDITOR_ENV.lock().unwrap();
+        let temp_root = unique_temp_path("rustle-ui-session-test");
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let manager = temp_root.join("systemctl");
+        std::fs::write(
+            &manager,
+            "#!/bin/sh\nprintf '%s' '{\"DISPLAY\":\":88\",\"WAYLAND_DISPLAY\":\"wayland-test\"}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&manager, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let original =
+            ["DISPLAY", "WAYLAND_DISPLAY", "PATH"].map(|key| (key, std::env::var_os(key)));
+        std::env::remove_var("DISPLAY");
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::set_var("PATH", &temp_root);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(spawn_command(CommandLine {
+            program: OsString::from("/bin/sh"),
+            args: vec![
+                OsString::from("-c"),
+                OsString::from(
+                    "test \"$DISPLAY\" = :88 && test \"$WAYLAND_DISPLAY\" = wayland-test",
+                ),
+            ],
+        }));
+        for (key, value) in original {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        let _ = std::fs::remove_dir_all(temp_root);
+        result.unwrap();
+    }
 
     fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
         let timestamp = SystemTime::now()
