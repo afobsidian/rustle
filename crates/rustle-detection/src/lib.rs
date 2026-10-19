@@ -231,7 +231,6 @@ async fn reconcile_detected_meeting(
     let candidate = match snapshot_meeting_candidate(active_meeting.as_ref()).await {
         Ok(candidate) => candidate,
         Err(error) => {
-            warn!(%error, "failed to inspect Hyprland clients for meeting detection");
             if active_meeting
                 .as_ref()
                 .is_some_and(|meeting| meeting.address == "teams-dbus")
@@ -240,6 +239,7 @@ async fn reconcile_detected_meeting(
                 end_detected_meeting(event_tx, active_meeting);
             }
             if detection_error.as_ref() != Some(&error) {
+                warn!(%error, "failed to inspect Hyprland clients for meeting detection");
                 publish(
                     event_tx,
                     AppEvent::NotificationRequested {

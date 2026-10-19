@@ -170,11 +170,9 @@ def main(binary, work, microphone, output):
     policy.mkdir(parents=True)
     (policy / "rustle-test.conf").write_text("""wireplumber.profiles = {
       main = {
-        monitor.alsa = disabled
-        monitor.alsa-midi = disabled
-        monitor.bluez = disabled
-        monitor.libcamera = disabled
-        monitor.v4l2 = disabled
+        hardware.audio = disabled
+        hardware.bluetooth = disabled
+        hardware.video-capture = disabled
       }
     }
     """)

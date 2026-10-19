@@ -108,8 +108,9 @@ pub async fn call_state() -> Result<bool, String> {
 
 pub(crate) async fn watch(trigger: mpsc::UnboundedSender<()>) {
     loop {
+        let bus = bus_name();
         let mut child = match Command::new("busctl")
-            .args(["--user", "--json=short", "monitor", &bus_name()])
+            .args(["--user", "--json=short", "monitor", &bus])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
@@ -125,8 +126,9 @@ pub(crate) async fn watch(trigger: mpsc::UnboundedSender<()>) {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let message = serde_json::from_str::<serde_json::Value>(&line).ok();
-                let member = message.as_ref().and_then(|value| value["member"].as_str());
-                if matches!(member, Some("InCallChanged" | "NameOwnerChanged"))
+                if message
+                    .as_ref()
+                    .is_some_and(|value| relevant_signal(value, &bus))
                     && trigger.send(()).is_err()
                 {
                     return;
@@ -138,9 +140,34 @@ pub(crate) async fn watch(trigger: mpsc::UnboundedSender<()>) {
     }
 }
 
+fn relevant_signal(message: &serde_json::Value, bus: &str) -> bool {
+    match message["member"].as_str() {
+        Some("InCallChanged") => true,
+        Some("NameOwnerChanged") => message["payload"]["data"][0].as_str() == Some(bus),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignores_unrelated_dbus_name_changes() {
+        let bus = "com.github.IsmaelMartinez.teams_for_linux";
+        assert!(!relevant_signal(
+            &serde_json::json!({"member":"NameOwnerChanged","payload":{"data":[":1.42","",":1.42"]}}),
+            bus
+        ));
+        assert!(relevant_signal(
+            &serde_json::json!({"member":"NameOwnerChanged","payload":{"data":[bus,"",":1.42"]}}),
+            bus
+        ));
+        assert!(relevant_signal(
+            &serde_json::json!({"member":"InCallChanged"}),
+            bus
+        ));
+    }
 
     #[test]
     fn only_in_call_controls_recording() {
