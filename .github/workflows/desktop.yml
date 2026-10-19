@@ -29,7 +29,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: target/desktop-models
-          key: rustle-default-models-a03779c8-626b4a66
+          key: rustle-default-models-a03779c8-740185b2
       - uses: actions/cache@v4
         with:
           path: target/desktop-vm/base.img

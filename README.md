@@ -36,7 +36,7 @@ rustle
 ```
 
 Setup preserves Teams configuration, backs it up before enabling D-Bus, downloads
-and SHA-256 verifies pinned Whisper and Qwen models (about 2.3 GB), then runs an
+and SHA-256 verifies pinned Whisper and Gemma 4 E2B models (about 3.3 GB), then runs an
 automatic capture-to-note test. Restart Teams after changing its D-Bus setting.
 The first normal launch also performs setup when no matching readiness record
 exists. Setup errors appear in diagnostics and desktop notifications.
@@ -76,6 +76,12 @@ Data lives under `$XDG_DATA_HOME/rustle` (normally `~/.local/share/rustle`):
 `recordings/`, `transcripts/`, `notes/`, and `logs/rustle.log`. Configuration is
 `$XDG_CONFIG_HOME/rustle/config.toml` (normally `~/.config/rustle/config.toml`).
 Local Whisper and llama.cpp are the default providers; Ollama is optional.
+Fresh configurations use Gemma 4 E2B IT Q4_K_M for notes. Existing model settings
+are preserved. See the [local model evaluation](docs/model-evaluation-2026-10.md)
+for full-meeting timings, quality findings, and reproducible tests; the short
+provider benchmark does not establish meeting-note accuracy. Generated notes
+remain drafts to review, particularly when transcription or speaker identity is
+unclear.
 Unsupported hosted providers produce observable fallback notes and fail a
 successful-processing test. Existing browser-title detection remains available;
 Teams desktop windows use D-Bus instead of title heuristics.

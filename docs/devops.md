@@ -50,7 +50,7 @@ Required scenarios:
 | Scenario | Acceptance |
 | --- | --- |
 | Package | Installed assets, executable dependencies, launcher and user unit validate outside the checkout. |
-| Trigger, audio and models | A simulated Teams call starts the installed process recording automatically; private 48 kHz microphone and stereo output speech survive production capture, real Whisper, and real Qwen inference. |
+| Trigger, audio and models | A simulated Teams call starts the installed process recording automatically; private 48 kHz microphone and stereo output speech survive production capture, real Whisper, and real Gemma 4 E2B inference. |
 | Output changes and rotation | Switching the private default output reconnects capture; multiple valid chunks produce one final note. |
 | Transient audio queries | One deliberately stalled real device query leaves capture running; persistent query failures are bounded by a crate-local regression test. |
 | Notes | The explicit Friday approval appears under decisions; Morgan's checklist and Thursday deadline appear under action items. Fallback warnings fail this scenario. |

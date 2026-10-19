@@ -315,10 +315,10 @@ openai_api_key = ""
 
 [ai]
 provider = "llama_cpp"  # "llama_cpp" | "openai" | "anthropic" | "ollama"
-model = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+model = "unsloth/gemma-4-E2B-it-GGUF"
 model_path = ""
-hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
-hf_model_file = "qwen2.5-3b-instruct-q4_k_m.gguf"
+hf_repo = "unsloth/gemma-4-E2B-it-GGUF"
+hf_model_file = "gemma-4-E2B-it-Q4_K_M.gguf"
 api_key = ""
 ollama_url = "http://localhost:11434"
 system_prompt = """You are a meeting notes assistant. Produce concise, structured notes with a summary, key decisions, action items, and attendees when available."""

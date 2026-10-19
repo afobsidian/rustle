@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 pub(crate) const WHISPER_SHA: &str =
     "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
 pub(crate) const NOTES_SHA: &str =
-    "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d";
+    "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8";
 
 pub(crate) fn check_cpu() -> anyhow::Result<String> {
     #[cfg(target_arch = "x86_64")]
@@ -127,12 +127,12 @@ pub(crate) async fn prepare(settings: &mut Settings) -> anyhow::Result<()> {
             let model = if settings.ai.model_path.is_empty() {
                 anyhow::ensure!(settings.ai.hf_repo == defaults.ai.hf_repo && settings.ai.hf_model_file == defaults.ai.hf_model_file,
                     "place your custom model locally and set ai.model_path; automatic verified downloads support the default model");
-                directory.join("qwen2.5-3b-instruct-q4_k_m.gguf")
+                directory.join("gemma-4-E2B-it-Q4_K_M.gguf")
             } else {
                 expand_tilde(&settings.ai.model_path)?
             };
-            if model == directory.join("qwen2.5-3b-instruct-q4_k_m.gguf") {
-                download("https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/7dabda4d13d513e3e842b20f0d435c732f172cbe/qwen2.5-3b-instruct-q4_k_m.gguf", &model, NOTES_SHA).await?;
+            if model == directory.join("gemma-4-E2B-it-Q4_K_M.gguf") {
+                download("https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf", &model, NOTES_SHA).await?;
             }
             anyhow::ensure!(
                 model.is_file(),
