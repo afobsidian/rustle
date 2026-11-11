@@ -28,6 +28,7 @@ Install PipeWire, its PulseAudio compatibility server, WirePlumber, `pactl`, the
 PipeWire command-line tools, systemd/D-Bus, Python 3, curl, and xdg-utils. Fedora's
 recorder package is `pipewire-utils`; Arch's is `pipewire-audio`. The RPM declares
 runtime dependencies, and obsidian-blue installs them as required packages.
+Model downloads use Rustls TLS; the binary does not require system OpenSSL libraries.
 
 ```sh
 rustle setup

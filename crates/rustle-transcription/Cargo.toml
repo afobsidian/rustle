@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-hf-hub = "0.4.3"
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
 hound = "3.5.1"
 rustle-core = { path = "../rustle-core" }
 tokio.workspace = true

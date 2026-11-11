@@ -30,6 +30,7 @@ def verify(prefix):
         assert result.stdout.startswith("rustle "), result.stdout
         linked = subprocess.run(["ldd", str(binary)], capture_output=True, text=True, timeout=15)
         assert linked.returncode == 0 and "not found" not in linked.stdout + linked.stderr, linked.stdout + linked.stderr
+        assert "libssl.so" not in linked.stdout and "libcrypto.so" not in linked.stdout, "binary must not depend on system OpenSSL"
         # An explicit user disablement must stop graphical-session startup before setup/downloads.
         config = Path(directory) / "config/rustle/config.toml"
         config.parent.mkdir(parents=True, exist_ok=True)
